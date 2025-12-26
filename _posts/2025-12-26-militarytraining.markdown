@@ -4,7 +4,7 @@ title:      "221班国防军事活动记录"
 subtitle:   " \"青春不散场，221班永相伴\""
 date:       2025-12-26 22:26:27
 author:     "【素材选自公众号】"
-header-img: "img/post-bg-2015.jpg"
+header-img: "img/640.jfif"
 catalog: true
 tags:
     - Meta
