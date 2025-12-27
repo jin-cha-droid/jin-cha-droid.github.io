@@ -44,7 +44,7 @@ tags:
 <!-- 自动播放音乐 + 离开页面停止播放 -->
 <audio id="autoPlayMusic" loop="loop" style="display: none;">
   <!-- 替换成你的音乐文件路径/外链 -->
-  <source src="{{ site.baseurl }}/music/your-music.mp3" type="music/[长]颁奖&登台-08.mp3">
+  <source src="{{ site.baseurl }}/music/[长]颁奖&登台-08.mp3" type="audio/mpeg">
   你的浏览器不支持HTML5音频播放，请升级浏览器！
 </audio>
 
