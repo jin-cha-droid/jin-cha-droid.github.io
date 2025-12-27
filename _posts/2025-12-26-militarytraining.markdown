@@ -41,3 +41,41 @@ tags:
 那身迷彩服早已叠进了衣柜，可军训教会我们的坚持、团结与担当，却成了刻在骨子里的品质。它是我们 221 班共同的成长序章，是少年们在青春里写下的第一笔亮色，也终将成为我们未来路上，最温暖的力量。
 —— z 记于军训闭营次日
 
+<!-- 自动播放音乐 + 离开页面停止播放 -->
+<audio id="autoPlayMusic" loop="loop" style="display: none;">
+  <!-- 替换成你的音乐文件路径/外链 -->
+  <source src="{{ site.baseurl }}/music/your-music.mp3" type="music/[长]颁奖&登台-08.mp3">
+  你的浏览器不支持HTML5音频播放，请升级浏览器！
+</audio>
+
+<script>
+  // 页面加载完成后自动播放音乐（解决浏览器自动播放限制）
+  window.onload = function() {
+    const audio = document.getElementById('autoPlayMusic');
+    // 尝试自动播放，兼容不同浏览器
+    audio.play().catch(err => {
+      // 如果浏览器禁止自动播放，点击页面任意位置触发播放（备用方案）
+      document.addEventListener('click', function playMusicOnClick() {
+        audio.play();
+        document.removeEventListener('click', playMusicOnClick); // 只触发一次
+      }, { once: true });
+    });
+  };
+
+  // 离开页面（关闭/切标签/跳其他页）时停止播放
+  window.addEventListener('beforeunload', function() {
+    const audio = document.getElementById('autoPlayMusic');
+    audio.pause(); // 暂停播放
+    audio.currentTime = 0; // 重置播放进度
+  });
+
+  // 切到其他标签页暂停，切回来继续播放（体验优化）
+  document.addEventListener('visibilitychange', function() {
+    const audio = document.getElementById('autoPlayMusic');
+    if (document.hidden) {
+      audio.pause();
+    } else {
+      audio.play().catch(err => {});
+    }
+  });
+</script>
