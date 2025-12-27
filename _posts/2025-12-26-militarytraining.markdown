@@ -3,7 +3,7 @@ layout:     post
 title:      "221班国防军事活动记录"
 subtitle:   " \"青春不散场，221班永相伴\""
 date:       2025-12-26 22:26:27
-author:     "【素材选自公众号】"
+author:     "from z曾某某 2025年12月26日"
 header-img: "img/640.jfif"
 catalog: true
 tags:
