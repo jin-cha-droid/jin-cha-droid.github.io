@@ -222,34 +222,19 @@
       });
     }
 
-    // 登录验证 + 拉黑校验
+        // 登录验证 + 拉黑校验（临时跳过所有验证，强制登录）
     async function checkPassword() {
-      // 第一步：校验当前访客是否被拉黑
-      getCurrentVisitorId();
-      // 先加载拉黑列表（无需PAT）
-      await loadBaseData();
-      if (BANNED_VISITOR_IDS.includes(CURRENT_VISITOR_ID)) {
-        document.getElementById('loginError').style.display = 'block';
-        document.getElementById('loginError').innerText = '你已被拉黑，禁止登录！';
-        return;
-      }
-
-      // 第二步：密码验证
-      const inputPwd = document.getElementById('passwordInput').value;
-      const inputHash = await sha256(inputPwd);
-      const loginError = document.getElementById('loginError');
-
-      if (inputHash === ADMIN_PWD_HASH) {
-        document.getElementById('loginBox').style.display = 'none';
-        document.getElementById('adminContent').style.display = 'block';
-        document.querySelectorAll('.module').forEach(m => m.style.display = 'block');
-        // 上报管理员访问（需要PAT，无则跳过）
-        const token = getToken();
-        if (token) reportVisit(token);
-      } else {
-        loginError.style.display = 'block';
-        document.getElementById('passwordInput').value = '';
-      }
+      // 直接跳过所有校验，强制进入后台
+      document.getElementById('loginBox').style.display = 'none';
+      document.getElementById('adminContent').style.display = 'block';
+      document.querySelectorAll('.module').forEach(m => m.style.display = 'block');
+      
+      // 初始化基础数据，避免后续功能报错
+      ADMIN_PWD_HASH = "64c87cde1203e960a82f2029908f7814100e339f8b6541b69e5948f1176504e03";
+      BANNED_VISITOR_IDS = [];
+      CURRENT_VISITOR_ID = getCurrentVisitorId();
+      
+      alert('已跳过密码校验，成功进入后台！请立即到「密码管理」模块修改密码！');
     }
 
     // 按回车登录
