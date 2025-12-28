@@ -5,198 +5,145 @@
 {% include nav.html %}
 {% include search.html %}
 
-<!-- 主站访客统计核心代码（带完整日志+兜底） -->
+<!-- ========== 核心功能：主站统计+拉黑检测+公告 ========== -->
 <script>
-  // ========== 1. 必改配置（替换为你的真实信息） ==========
-  const STATS_CONFIG = {
-    // Gist ID（你的Gist地址中的一串字符）
+  // 基础配置（替换为你的Gist ID，PAT通过后台输入，不直接写在代码里）
+  const SITE_CONFIG = {
     gistId: "778c919fa51dbc8b932261916da783e7",
-    // 统计数据文件名（固定不变）
-    statsFile: "blog_stats.json",
-    // 仅Gist权限的PAT（ghp_开头，无空格/特殊字符）
-    pat: "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"
+    mainDomain: "https://jin-cha-droid.github.io/",
+    statsFile: "site_visitor_stats.json",    // 访客统计数据
+    banFile: "site_ban_list.json",            // 拉黑名单
+    noticeFile: "site_notice.json"            // 公告内容
   };
-  // 主站域名（确保只统计这个域名）
-  const MAIN_DOMAIN = "https://jin-cha-droid.github.io";
 
-  // ========== 2. 生成唯一访客ID ==========
-  function getUniqueVisitorId() {
-    let visitorId = localStorage.getItem('main_site_visitor_id');
-    if (!visitorId) {
-      // 生成规则：确保唯一性
-      visitorId = `VIS_${Date.now()}_${Math.random().toString(36).slice(2, 14)}`;
-      localStorage.setItem('main_site_visitor_id', visitorId);
-      console.log("[统计] 生成新访客ID：", visitorId);
+  // 1. 生成唯一访客ID
+  function getVisitorId() {
+    let id = localStorage.getItem('site_unique_visitor_id');
+    if (!id) {
+      id = `VIS_${Date.now()}_${Math.random().toString(36).slice(2, 14)}`;
+      localStorage.setItem('site_unique_visitor_id', id);
     }
-    return visitorId;
+    return id;
   }
 
-  // ========== 3. 初始化Gist文件（首次访问自动创建） ==========
-  async function initGistFile() {
+  // 2. 通用Gist请求函数（需传入PAT）
+  async function requestGist(pat, method = 'GET', fileContent = {}) {
     try {
-      console.log("[统计] 尝试初始化Gist文件...");
-      const initData = {
-        visitors: [],
-        totalVisits: 0
+      const headers = {
+        'Authorization': `token ${pat}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github.v3+json'
       };
-      const response = await fetch(`https://api.github.com/gists/${STATS_CONFIG.gistId}`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `token ${STATS_CONFIG.pat}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/vnd.github.v3+json'
-        },
-        body: JSON.stringify({
-          files: {
-            [STATS_CONFIG.statsFile]: {
-              content: JSON.stringify(initData, null, 2)
-            }
-          }
-        })
-      });
-
-      if (response.ok) {
-        console.log("[统计] Gist文件初始化成功");
-        return initData;
-      } else {
-        const errText = await response.text();
-        console.error("[统计] Gist初始化失败：", response.status, errText);
-        return { visitors: [], totalVisits: 0 };
+      const options = { method, headers };
+      
+      if (method === 'PATCH') {
+        options.body = JSON.stringify({ files: fileContent });
       }
-    } catch (error) {
-      console.error("[统计] Gist初始化异常：", error.message);
-      return { visitors: [], totalVisits: 0 };
+
+      const res = await fetch(`https://api.github.com/gists/${SITE_CONFIG.gistId}`, options);
+      return res.ok ? await res.json() : null;
+    } catch (e) {
+      console.error('Gist请求失败：', e);
+      return null;
     }
   }
 
-  // ========== 4. 读取统计数据 ==========
-  async function loadStatsData() {
-    try {
-      console.log("[统计] 读取统计数据...");
-      const response = await fetch(`https://api.github.com/gists/${STATS_CONFIG.gistId}`, {
-        headers: {
-          'Authorization': `token ${STATS_CONFIG.pat}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/vnd.github.v3+json'
-        },
-        cache: 'no-cache' // 禁用缓存，确保读取最新数据
-      });
-
-      if (!response.ok) {
-        // 读取失败则初始化
-        return await initGistFile();
-      }
-
-      const gistData = await response.json();
-      // 检查文件是否存在
-      if (!gistData.files || !gistData.files[STATS_CONFIG.statsFile]) {
-        console.log("[统计] 统计文件不存在，初始化...");
-        return await initGistFile();
-      }
-
-      const statsContent = gistData.files[STATS_CONFIG.statsFile].content;
-      const stats = JSON.parse(statsContent);
-      console.log("[统计] 读取数据成功：", stats);
-      return stats;
-    } catch (error) {
-      console.error("[统计] 读取数据异常：", error.message);
-      return { visitors: [], totalVisits: 0 };
-    }
-  }
-
-  // ========== 5. 保存统计数据 ==========
-  async function saveStatsData(stats) {
-    try {
-      console.log("[统计] 保存统计数据...");
-      const response = await fetch(`https://api.github.com/gists/${STATS_CONFIG.gistId}`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `token ${STATS_CONFIG.pat}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/vnd.github.v3+json'
-        },
-        body: JSON.stringify({
-          files: {
-            [STATS_CONFIG.statsFile]: {
-              content: JSON.stringify(stats, null, 2)
-            }
-          }
-        })
-      });
-
-      if (response.ok) {
-        console.log("[统计] 数据保存成功！总访问数：", stats.totalVisits);
-      } else {
-        const errText = await response.text();
-        console.error("[统计] 保存失败：", response.status, errText);
-      }
-    } catch (error) {
-      console.error("[统计] 保存异常：", error.message);
-    }
-  }
-
-  // ========== 6. 核心统计逻辑（强制执行） ==========
-  async function trackMainSiteVisit() {
-    // 仅统计主站，排除后台页面
-    if (!window.location.href.startsWith(MAIN_DOMAIN) || window.location.href.includes('site-stats')) {
-      console.log("[统计] 非主站页面，跳过统计");
-      return;
+  // 3. 主站访客统计（仅统计主站，排除后台）
+  async function trackMainSiteVisit(pat) {
+    if (!window.location.href.startsWith(SITE_CONFIG.mainDomain) || window.location.href.includes('site-admin')) {
+      return; // 排除后台页面
     }
 
-    // 必改：验证PAT是否配置
-    if (STATS_CONFIG.pat === "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx") {
-      console.error("[统计] 错误：未替换PAT！请修改STATS_CONFIG.pat为你的真实PAT");
-      alert("统计功能未配置：请替换代码中的PAT为你的GitHub PAT！");
-      return;
-    }
-
-    const visitorId = getUniqueVisitorId();
+    const visitorId = getVisitorId();
     const now = new Date().toISOString();
-    // 读取数据（失败则初始化）
-    const stats = await loadStatsData();
+    const gistData = await requestGist(pat);
+    
+    // 初始化统计数据
+    let stats = { visitors: [], totalVisits: 0 };
+    if (gistData && gistData.files[SITE_CONFIG.statsFile]) {
+      stats = JSON.parse(gistData.files[SITE_CONFIG.statsFile].content);
+    }
 
     // 更新统计
-    stats.totalVisits += 1; // 总访问数+1
+    stats.totalVisits += 1;
     const visitorIndex = stats.visitors.findIndex(v => v.id === visitorId);
     if (visitorIndex === -1) {
-      // 新访客
       stats.visitors.push({
         id: visitorId,
         firstVisit: now,
         lastVisit: now,
-        visitCount: 1
+        visitCount: 1,
+        ip: '', // 可扩展IP记录（需额外接口）
+        device: navigator.userAgent
       });
-      console.log("[统计] 新访客，已记录");
     } else {
-      // 老访客
-      stats.visitors[visitorIndex].visitCount += 1;
       stats.visitors[visitorIndex].lastVisit = now;
-      console.log("[统计] 老访客，访问次数+1");
+      stats.visitors[visitorIndex].visitCount += 1;
     }
 
-    // 保存数据
-    await saveStatsData(stats);
+    // 保存统计数据
+    await requestGist(pat, 'PATCH', {
+      [SITE_CONFIG.statsFile]: { content: JSON.stringify(stats, null, 2) }
+    });
   }
 
-  // ========== 7. 页面加载后立即执行（防抖） ==========
-  let isTracked = false;
-  window.addEventListener('load', async () => {
-    if (!isTracked) {
-      isTracked = true;
-      await trackMainSiteVisit();
+  // 4. 拉黑检测
+  async function checkBanStatus(pat) {
+    const visitorId = getVisitorId();
+    const gistData = await requestGist(pat);
+    
+    let banList = { bannedIds: [] };
+    if (gistData && gistData.files[SITE_CONFIG.banFile]) {
+      banList = JSON.parse(gistData.files[SITE_CONFIG.banFile].content);
     }
-  });
-  // 备用：DOM加载完成也执行，确保触发
-  document.addEventListener('DOMContentLoaded', async () => {
-    if (!isTracked) {
-      isTracked = true;
-      await trackMainSiteVisit();
+
+    if (banList.bannedIds.includes(visitorId)) {
+      document.body.innerHTML = `
+        <div style="width: 100vw; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #f8f9fa;">
+          <h1 style="color: #dc3545; font-size: 32px;">🚫 你已被禁止访问</h1>
+          <p style="color: #6c757d; margin-top: 20px;">违反访问规则，联系管理员解封</p>
+        </div>
+      `;
+      return true;
     }
-  });
+    return false;
+  }
+
+  // 5. 公告展示
+  async function showNotice(pat) {
+    const gistData = await requestGist(pat);
+    let notice = { content: '', show: false };
+    
+    if (gistData && gistData.files[SITE_CONFIG.noticeFile]) {
+      notice = JSON.parse(gistData.files[SITE_CONFIG.noticeFile].content);
+    }
+
+    if (notice.show && notice.content) {
+      const noticeEl = document.getElementById('blog-notice-container');
+      const noticeText = document.getElementById('notice-text');
+      noticeText.innerText = notice.content;
+      noticeEl.style.display = 'flex';
+    }
+  }
+
+  // 6. 初始化（从后台缓存读取PAT，避免硬编码）
+  async function initSiteFeatures() {
+    const pat = localStorage.getItem('site_admin_pat');
+    if (!pat) return; // 未配置PAT则仅基础访问，不统计/检测
+    
+    const isBanned = await checkBanStatus(pat);
+    if (!isBanned) {
+      await trackMainSiteVisit(pat);
+      await showNotice(pat);
+    }
+  }
+
+  // 页面加载后执行
+  window.addEventListener('load', initSiteFeatures);
 </script>
 
 <!-- 公告条（保留原有样式） -->
-<div id="blog-notice-container" style="display: none; background: #f8d7da; color: #721c24; padding: 12px 20px; border: 1px solid #f5c6cb; border-radius: 4px; margin: 10px 0; justify-content: space-between; align-items: center;">
+<div id="blog-notice-container" style="display: none; background: #f8d7da; color: #721c24; padding: 12px 20px; border: 1px solid #f5c6cb; border-radius: 4px; margin: 10px 0; display: flex; justify-content: space-between; align-items: center;">
   <span id="notice-text"></span>
   <button onclick="this.parentElement.style.display='none'" style="background: transparent; border: none; color: #721c24; cursor: pointer; font-size: 16px; padding: 0 8px; line-height: 1;">&times;</button>
 </div>
