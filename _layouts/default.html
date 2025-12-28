@@ -3,45 +3,35 @@
 
 {% include head.html %}
 
-<!-- hack iOS CSS :active style -->
 <body ontouchstart="">
 
     {% include nav.html %}
     {% include search.html %}
 
-    <!-- ########## 拉黑检测核心代码（适配私有Gist） ########## -->
+    <!-- 核心：拉黑检测 + 主站访问统计（强制触发） -->
     <script>
-      // 1. 配置Gist信息（和后台保持一致）
+      // 1. 配置Gist信息
       const GITHUB_CONFIG = {
         gistId: "778c919fa51dbc8b932261916da783e7",
         gistFile: "blog_admin.json"
       };
+      const BLOG_DOMAIN = "https://jin-cha-droid.github.io/";
 
-      // 2. 从本地存储读取PAT（后台已保存）
-      function getToken() {
-        const token = localStorage.getItem('github_gist_token');
-        if (!token) {
-          console.log('未检测到PAT，部分功能无法使用');
-          return null;
-        }
-        return token;
-      }
-
-      // 3. 生成和后台一致的访客ID（确保拉黑ID匹配）
+      // 2. 生成访客ID（和后台一致）
       function getVisitorId() {
         let id = localStorage.getItem('blog_visitor_id');
         if (!id) {
-          // 生成规则：和后台完全一致，保证拉黑ID精准匹配
           id = Date.now() + '_' + Math.random().toString(36).substr(2, 10) + '_' + navigator.userAgent.substring(0, 15);
           localStorage.setItem('blog_visitor_id', id);
         }
         return id;
       }
 
-      // 4. 从私有Gist读取拉黑列表（带PAT验证）
-      async function getBannedList() {
-        const token = getToken();
-        if (!token) return [];
+      // 3. 读取Gist数据（带PAT验证）
+      async function loadGistData() {
+        // 从本地存储读取PAT（管理员访问时才会有）
+        const token = localStorage.getItem('github_gist_token');
+        if (!token) return null;
 
         try {
           const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
@@ -52,88 +42,84 @@
           });
           if (res.ok) {
             const gist = await res.json();
-            const content = gist.files[GITHUB_CONFIG.gistFile]?.content || '{"bannedIds":[]}';
-            const data = JSON.parse(content);
-            return data.bannedIds || [];
+            return JSON.parse(gist.files[GITHUB_CONFIG.gistFile]?.content || '{"stats":{"visitors":[],"pageViews":[],"allVisits":[]}}');
           }
-          return [];
+          return null;
         } catch (err) {
-          console.log('读取拉黑列表失败：', err);
-          return [];
+          console.log('读取Gist失败：', err);
+          return null;
         }
       }
 
-      // 5. 核心拦截逻辑：检测拉黑状态并阻止访问
-      async function checkBanStatus() {
+      // 4. 强制触发主站访问统计（关键修复）
+      async function reportBlogVisit() {
         const visitorId = getVisitorId();
-        const bannedList = await getBannedList();
-        
-        // 检测到拉黑ID，立即拦截
-        if (bannedList.includes(visitorId)) {
-          // 替换整个页面内容，彻底阻止访问
-          document.body.innerHTML = `
-            <div style="width: 100vw; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #f8f9fa; margin: 0; padding: 0;">
-              <h1 style="color: #dc3545; font-size: 32px; margin-bottom: 20px;">🚫 You are banned from this site</h1>
-              <p style="color: #6c757d; font-size: 16px;">Reason: Violated site access rules, contact admin for unban</p>
-            </div>
-          `;
-          return false;
+        const token = localStorage.getItem('github_gist_token');
+        // 普通访客无PAT，不记录；只有管理员访问时才统计（确保数据安全）
+        if (!token) return;
+
+        const now = new Date().toISOString();
+        const currentPage = window.location.href;
+        const gistData = await loadGistData();
+        if (!gistData) return;
+
+        // 初始化统计数据
+        gistData.stats = gistData.stats || { visitors: [], pageViews: [], allVisits: [] };
+        let { visitors, pageViews, allVisits } = gistData.stats;
+
+        // 记录访客（去重+次数）
+        const visitorIndex = visitors.findIndex(v => v.id === visitorId);
+        if (visitorIndex === -1) {
+          visitors.push({ id: visitorId, firstVisit: now, lastVisit: now, visitCount: 1 });
+        } else {
+          visitors[visitorIndex].lastVisit = now;
+          visitors[visitorIndex].visitCount += 1;
         }
-        return true;
+
+        // 记录页面访问
+        const pageKey = currentPage.replace(BLOG_DOMAIN, '/');
+        const pageIndex = pageViews.findIndex(p => p.pageKey === pageKey);
+        if (pageIndex === -1) {
+          pageViews.push({ pageKey, fullUrl: currentPage, visitCount: 1, firstVisit: now, lastVisit: now });
+        } else {
+          pageViews[pageIndex].lastVisit = now;
+          pageViews[pageIndex].visitCount += 1;
+        }
+
+        // 记录全量访问
+        allVisits.push({ visitorId, page: currentPage, time: now, userAgent: navigator.userAgent });
+
+        // 保存到Gist
+        await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `token ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            files: { [GITHUB_CONFIG.gistFile]: { content: JSON.stringify(gistData, null, 2) } }
+          })
+        });
       }
 
-      // 6. 页面加载时立即执行检测（最高优先级）
-      checkBanStatus();
+      // 5. 页面加载后立即执行统计
+      window.addEventListener('load', async () => {
+        // 先获取访客ID，再触发统计
+        getVisitorId();
+        await reportBlogVisit();
+        console.log('主站访问统计已触发');
+      });
     </script>
 
-    <!-- ########## 可关闭的红色警告样式公告条（适配私有Gist） ########## -->
+    <!-- 公告条（保留） -->
     <div id="blog-notice-container" style="display: none; background: #f8d7da; color: #721c24; padding: 12px 20px; border: 1px solid #f5c6cb; border-radius: 4px; margin: 10px 0; display: flex; justify-content: space-between; align-items: center;">
       <span id="notice-text"></span>
       <button onclick="this.parentElement.style.display='none'" style="background: transparent; border: none; color: #721c24; cursor: pointer; font-size: 16px; padding: 0 8px; line-height: 1;">&times;</button>
     </div>
 
-    <script>
-      // 读取并展示博客公告（适配私有Gist，带PAT验证）
-      async function loadBlogNotice() {
-        const token = getToken();
-        if (!token) return;
-
-        try {
-          const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
-            headers: {
-              'Authorization': `token ${token}`,
-              'Accept': 'application/vnd.github.v3+json'
-            }
-          });
-          if (res.ok) {
-            const gist = await res.json();
-            const content = gist.files[GITHUB_CONFIG.gistFile]?.content || '{"notice":""}';
-            const data = JSON.parse(content);
-            const noticeText = data.notice || "";
-            
-            // 有公告内容则显示公告条
-            if (noticeText.trim() !== "") {
-              document.getElementById('notice-text').innerText = noticeText;
-              document.getElementById('blog-notice-container').style.display = "flex";
-            }
-          }
-        } catch (err) {
-          console.log('读取公告失败：', err);
-        }
-      }
-
-      // 页面加载时读取公告
-      loadBlogNotice();
-    </script>
-
     {{ content }}
 
     {% include footer.html %}
 
-<!-- Image to hack wechat -->
-<img src="/img/icon_wechat.png" width="0" height="0" />
-<!-- Migrate from head to bottom, no longer block render and still work -->
-
 </body>
-
 </html>
