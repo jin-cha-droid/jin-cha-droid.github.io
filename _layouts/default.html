@@ -1,161 +1,146 @@
 <!DOCTYPE html>
-<html lang="en">
-
-{% include head.html %}
-
-<body ontouchstart="">
-    {% include nav.html %}
-    {% include search.html %}
-
-    <!-- 主站独立统计代码（核心：只统计主站，不关联后台） -->
-    <script>
-        // 1. 配置（替换为你的Gist ID和仅gist权限的PAT）
-        const CONFIG = {
-            gistId: "778c919fa51dbc8b932261916da783e7", // 你的Gist ID
-            gistFile: "blog_stats.json", // 新建一个专门存主站统计的文件（避免和后台数据混）
-            pat: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // 仅gist权限的PAT
-        };
-        const MAIN_SITE = "https://jin-cha-droid.github.io/"; // 只统计这个域名
-
-        // 2. 生成主站专属访客ID（和后台ID区分）
-        function getMainSiteVisitorId() {
-            let id = localStorage.getItem('main_site_visitor_id');
-            if (!id) {
-                // 生成规则：确保和后台ID完全不同，避免统计混淆
-                id = "MAIN_" + Date.now() + "_" + Math.random().toString(36).substr(2, 15);
-                localStorage.setItem('main_site_visitor_id', id);
-            }
-            return id;
-        }
-
-        // 3. 读取主站统计数据
-        async function loadMainSiteStats() {
-            try {
-                const res = await fetch(`https://api.github.com/gists/${CONFIG.gistId}`, {
-                    headers: {
-                        'Authorization': `token ${CONFIG.pat}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                });
-                if (res.ok) {
-                    const gist = await res.json();
-                    // 如果没有专门的统计文件，初始化空数据
-                    const content = gist.files[CONFIG.gistFile]?.content || JSON.stringify({
-                        visitors: [], // 主站独立访客列表
-                        totalVisits: 0, // 主站总访问次数
-                        pageViews: {} // 各页面访问次数
-                    });
-                    return JSON.parse(content);
-                }
-                // 初始化空数据
-                return { visitors: [], totalVisits: 0, pageViews: {} };
-            } catch (err) {
-                console.log('读取主站统计失败：', err);
-                return { visitors: [], totalVisits: 0, pageViews: {} };
-            }
-        }
-
-        // 4. 核心：仅统计主站访问（彻底排除后台）
-        async function reportMainSiteVisit() {
-            // 过滤：只统计主站访问，排除后台页面
-            if (!window.location.href.startsWith(MAIN_SITE) || window.location.href.includes('blog-admin')) {
-                return; // 后台页面不统计
-            }
-
-            const visitorId = getMainSiteVisitorId();
-            const stats = await loadMainSiteStats();
-            const now = new Date().toISOString();
-            const currentPage = window.location.pathname || '/'; // 只取路径，比如/、/about/
-
-            // 1. 总访问次数+1（每一次主站访问都加）
-            stats.totalVisits += 1;
-
-            // 2. 独立访客统计（去重）
-            const isNewVisitor = !stats.visitors.some(v => v.id === visitorId);
-            if (isNewVisitor) {
-                stats.visitors.push({
-                    id: visitorId,
-                    firstVisit: now,
-                    lastVisit: now,
-                    visitCount: 1
-                });
-            } else {
-                // 老访客：更新最后访问时间+访问次数
-                const visitor = stats.visitors.find(v => v.id === visitorId);
-                visitor.lastVisit = now;
-                visitor.visitCount += 1;
-            }
-
-            // 3. 页面访问统计
-            stats.pageViews[currentPage] = stats.pageViews[currentPage] || { count: 0, lastVisit: now };
-            stats.pageViews[currentPage].count += 1;
-            stats.pageViews[currentPage].lastVisit = now;
-
-            // 保存到Gist（只存主站统计，不和后台数据混）
-            try {
-                await fetch(`https://api.github.com/gists/${CONFIG.gistId}`, {
-                    method: 'PATCH',
-                    headers: {
-                        'Authorization': `token ${CONFIG.pat}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        files: {
-                            [CONFIG.gistFile]: { content: JSON.stringify(stats, null, 2) }
-                        }
-                    })
-                });
-                console.log('主站访问已统计：', {
-                    visitorId: visitorId,
-                    totalVisits: stats.totalVisits,
-                    uniqueVisitors: stats.visitors.length
-                });
-            } catch (err) {
-                console.log('保存主站统计失败：', err);
-            }
-        }
-
-        // 5. 页面加载后立即触发主站统计（强制执行）
-        window.addEventListener('load', async () => {
-            await reportMainSiteVisit();
-        });
-
-        // 6. 拉黑检测（保留原有功能）
-        async function checkBanStatus() {
-            try {
-                const res = await fetch(`https://api.github.com/gists/${CONFIG.gistId}`, {
-                    headers: {
-                        'Authorization': `token ${CONFIG.pat}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                });
-                const gist = await res.json();
-                const banContent = gist.files['blog_admin.json']?.content || '{"bannedIds":[]}';
-                const banData = JSON.parse(banContent);
-                const bannedList = banData.bannedIds || [];
-                
-                if (bannedList.includes(getMainSiteVisitorId())) {
-                    document.body.innerHTML = `
-                        <div style="width: 100vw; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #f8f9fa;">
-                            <h1 style="color: #dc3545; font-size: 32px;">🚫 你已被禁止访问</h1>
-                            <p style="color: #6c757d; margin-top: 20px;">违反访问规则，联系管理员解封</p>
-                        </div>
-                    `;
-                }
-            } catch (err) {
-                console.log('拉黑检测失败：', err);
-            }
-        }
-        checkBanStatus();
-    </script>
-
-    <!-- 公告条（保留） -->
-    <div id="blog-notice-container" style="display: none; background: #f8d7da; color: #721c24; padding: 12px 20px; border: 1px solid #f5c6cb; border-radius: 4px; margin: 10px 0; display: flex; justify-content: space-between; align-items: center;">
-        <span id="notice-text"></span>
-        <button onclick="this.parentElement.style.display='none'" style="background: transparent; border: none; color: #721c24; cursor: pointer; font-size: 16px; padding: 0 8px; line-height: 1;">&times;</button>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% if page.title %}{{ page.title }} - {% endif %}{{ site.title }}</title>
+  <!-- 博客基础样式（保留你原有的样式/引入） -->
+  <link rel="stylesheet" href="{{ "/css/style.css" | relative_url }}">
+  <link rel="icon" href="{{ "/favicon.ico" | relative_url }}" type="image/x-icon">
+  <!-- 其他基础引入（如字体、图标等） -->
+</head>
+<body>
+  <!-- 博客头部导航（保留你原有的头部布局） -->
+  <header class="site-header">
+    <div class="container">
+      <h1 class="site-title"><a href="{{ "/" | relative_url }}">{{ site.title }}</a></h1>
+      <nav class="site-nav">
+        <a href="{{ "/" | relative_url }}">首页</a>
+        <a href="{{ "/archives" | relative_url }}">归档</a>
+        <a href="{{ "/about" | relative_url }}">关于</a>
+      </nav>
     </div>
+  </header>
 
+  <!-- 博客主要内容区域 -->
+  <main class="site-content container">
     {{ content }}
-    {% include footer.html %}
+  </main>
+
+  <!-- 博客底部 -->
+  <footer class="site-footer">
+    <div class="container">
+      <p>&copy; {{ site.time | date: "%Y" }} {{ site.title }} - 保留所有权利</p>
+    </div>
+  </footer>
+
+  <!-- ========== 核心：主站访客统计代码（强制生效） ========== -->
+  <script>
+    // 立即执行函数，确保页面加载后必触发统计
+    (async function() {
+      // 1. 核心配置（替换为你的真实PAT！）
+      const STATS_CONFIG = {
+        gistId: "778c919fa51dbc8b932261916da783e7",  // 你的Gist ID
+        statsFileName: "blog_stats.json",            // 统计数据文件名
+        pat: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // 仅Gist权限的PAT，替换为你的！
+      };
+
+      // 2. 生成唯一访客ID（不同设备/浏览器不重复）
+      function generateUniqueVisitorId() {
+        let visitorId = localStorage.getItem('main_site_visitor_id');
+        if (!visitorId) {
+          // 生成规则：前缀+时间戳+12位随机数，确保唯一性
+          visitorId = `VIS_${Date.now()}_${Math.random().toString(36).slice(2, 14)}`;
+          localStorage.setItem('main_site_visitor_id', visitorId);
+        }
+        return visitorId;
+      }
+
+      // 3. 读取Gist中的统计数据（无数据则初始化）
+      async function loadExistingStats() {
+        try {
+          const response = await fetch(`https://api.github.com/gists/${STATS_CONFIG.gistId}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `token ${STATS_CONFIG.pat}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'Content-Type': 'application/json'
+            }
+          });
+
+          if (!response.ok) {
+            console.warn('读取统计数据失败，使用初始空数据：', response.statusText);
+            return { visitors: [], totalVisits: 0 };
+          }
+
+          const gistData = await response.json();
+          const statsContent = gistData.files[STATS_CONFIG.statsFileName]?.content || JSON.stringify({
+            visitors: [],
+            totalVisits: 0
+          });
+          return JSON.parse(statsContent);
+        } catch (error) {
+          console.error('读取统计数据异常：', error);
+          return { visitors: [], totalVisits: 0 };
+        }
+      }
+
+      // 4. 保存更新后的统计数据到Gist
+      async function saveUpdatedStats(stats) {
+        try {
+          const response = await fetch(`https://api.github.com/gists/${STATS_CONFIG.gistId}`, {
+            method: 'PATCH',
+            headers: {
+              'Authorization': `token ${STATS_CONFIG.pat}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              files: {
+                [STATS_CONFIG.statsFileName]: {
+                  content: JSON.stringify(stats, null, 2)
+                }
+              }
+            })
+          });
+
+          if (response.ok) {
+            console.log('访客统计已成功保存！访客ID：', generateUniqueVisitorId());
+          } else {
+            console.error('保存统计数据失败：', response.statusText);
+          }
+        } catch (error) {
+          console.error('保存统计数据异常：', error);
+        }
+      }
+
+      // 5. 核心统计逻辑（强制执行）
+      const visitorId = generateUniqueVisitorId();
+      const now = new Date().toISOString();
+      const stats = await loadExistingStats();
+
+      // 总访问次数+1
+      stats.totalVisits += 1;
+
+      // 更新当前访客的访问记录
+      const visitorIndex = stats.visitors.findIndex(v => v.id === visitorId);
+      if (visitorIndex === -1) {
+        // 新访客：添加记录
+        stats.visitors.push({
+          id: visitorId,
+          firstVisit: now,
+          lastVisit: now,
+          visitCount: 1
+        });
+      } else {
+        // 老访客：更新次数和最后访问时间
+        stats.visitors[visitorIndex].visitCount += 1;
+        stats.visitors[visitorIndex].lastVisit = now;
+      }
+
+      // 保存统计数据（无论是否出错，都尝试保存）
+      await saveUpdatedStats(stats);
+    })();
+  </script>
 </body>
 </html>
