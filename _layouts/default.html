@@ -9,7 +9,7 @@
     {% include nav.html %}
     {% include search.html %}
 
-    <!-- ########## 新增：拉黑检测核心代码 ########## -->
+    <!-- ########## 拉黑检测核心代码（适配私有Gist） ########## -->
     <script>
       // 1. 配置Gist信息（和后台保持一致）
       const GITHUB_CONFIG = {
@@ -17,7 +17,17 @@
         gistFile: "blog_admin.json"
       };
 
-      // 2. 生成和后台一致的访客ID（确保拉黑ID匹配）
+      // 2. 从本地存储读取PAT（后台已保存）
+      function getToken() {
+        const token = localStorage.getItem('github_gist_token');
+        if (!token) {
+          console.log('未检测到PAT，部分功能无法使用');
+          return null;
+        }
+        return token;
+      }
+
+      // 3. 生成和后台一致的访客ID（确保拉黑ID匹配）
       function getVisitorId() {
         let id = localStorage.getItem('blog_visitor_id');
         if (!id) {
@@ -28,10 +38,18 @@
         return id;
       }
 
-      // 3. 从Gist读取拉黑列表（公开Gist版本，无需PAT）
+      // 4. 从私有Gist读取拉黑列表（带PAT验证）
       async function getBannedList() {
+        const token = getToken();
+        if (!token) return [];
+
         try {
-          const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`);
+          const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
+            headers: {
+              'Authorization': `token ${token}`,
+              'Accept': 'application/vnd.github.v3+json'
+            }
+          });
           if (res.ok) {
             const gist = await res.json();
             const content = gist.files[GITHUB_CONFIG.gistFile]?.content || '{"bannedIds":[]}';
@@ -45,7 +63,7 @@
         }
       }
 
-      // 4. 核心拦截逻辑：检测拉黑状态并阻止访问
+      // 5. 核心拦截逻辑：检测拉黑状态并阻止访问
       async function checkBanStatus() {
         const visitorId = getVisitorId();
         const bannedList = await getBannedList();
@@ -64,12 +82,51 @@
         return true;
       }
 
-      // 5. 页面加载时立即执行检测（最高优先级）
+      // 6. 页面加载时立即执行检测（最高优先级）
       checkBanStatus();
     </script>
-    <!-- ########## 拉黑检测代码结束 ########## -->
 
-    {{ content }}  <!-- 博客正文，拉黑用户看不到这里的内容 -->
+    <!-- ########## 可关闭的红色警告样式公告条（适配私有Gist） ########## -->
+    <div id="blog-notice-container" style="display: none; background: #f8d7da; color: #721c24; padding: 12px 20px; border: 1px solid #f5c6cb; border-radius: 4px; margin: 10px 0; display: flex; justify-content: space-between; align-items: center;">
+      <span id="notice-text"></span>
+      <button onclick="this.parentElement.style.display='none'" style="background: transparent; border: none; color: #721c24; cursor: pointer; font-size: 16px; padding: 0 8px; line-height: 1;">&times;</button>
+    </div>
+
+    <script>
+      // 读取并展示博客公告（适配私有Gist，带PAT验证）
+      async function loadBlogNotice() {
+        const token = getToken();
+        if (!token) return;
+
+        try {
+          const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
+            headers: {
+              'Authorization': `token ${token}`,
+              'Accept': 'application/vnd.github.v3+json'
+            }
+          });
+          if (res.ok) {
+            const gist = await res.json();
+            const content = gist.files[GITHUB_CONFIG.gistFile]?.content || '{"notice":""}';
+            const data = JSON.parse(content);
+            const noticeText = data.notice || "";
+            
+            // 有公告内容则显示公告条
+            if (noticeText.trim() !== "") {
+              document.getElementById('notice-text').innerText = noticeText;
+              document.getElementById('blog-notice-container').style.display = "flex";
+            }
+          }
+        } catch (err) {
+          console.log('读取公告失败：', err);
+        }
+      }
+
+      // 页面加载时读取公告
+      loadBlogNotice();
+    </script>
+
+    {{ content }}
 
     {% include footer.html %}
 
