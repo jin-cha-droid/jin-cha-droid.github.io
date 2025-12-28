@@ -4,172 +4,158 @@
 {% include head.html %}
 
 <body ontouchstart="">
-
     {% include nav.html %}
     {% include search.html %}
 
-    <!-- 核心：拉黑检测 + 全访客统计（含普通访客） -->
+    <!-- 主站独立统计代码（核心：只统计主站，不关联后台） -->
     <script>
-      // 1. 配置（嵌入仅gist权限的PAT）
-      const GITHUB_CONFIG = {
-        gistId: "778c919fa51dbc8b932261916da783e7",
-        gistFile: "blog_admin.json",
-        // 替换为你创建的「仅gist权限」的PAT
-        PAT: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" 
-      };
-      const BLOG_DOMAIN = "https://jin-cha-droid.github.io/";
+        // 1. 配置（替换为你的Gist ID和仅gist权限的PAT）
+        const CONFIG = {
+            gistId: "778c919fa51dbc8b932261916da783e7", // 你的Gist ID
+            gistFile: "blog_stats.json", // 新建一个专门存主站统计的文件（避免和后台数据混）
+            pat: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // 仅gist权限的PAT
+        };
+        const MAIN_SITE = "https://jin-cha-droid.github.io/"; // 只统计这个域名
 
-      // 2. 生成唯一访客ID（区分不同设备/浏览器）
-      function getVisitorId() {
-        let id = localStorage.getItem('blog_visitor_id');
-        if (!id) {
-          // 用随机数+时间戳+设备信息生成唯一ID
-          id = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}_${navigator.language}_${screen.width}`;
-          localStorage.setItem('blog_visitor_id', id);
-        }
-        return id;
-      }
-
-      // 3. 读取Gist数据（通用函数）
-      async function loadGistData() {
-        try {
-          const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
-            headers: {
-              'Authorization': `token ${GITHUB_CONFIG.PAT}`,
-              'Accept': 'application/vnd.github.v3+json'
+        // 2. 生成主站专属访客ID（和后台ID区分）
+        function getMainSiteVisitorId() {
+            let id = localStorage.getItem('main_site_visitor_id');
+            if (!id) {
+                // 生成规则：确保和后台ID完全不同，避免统计混淆
+                id = "MAIN_" + Date.now() + "_" + Math.random().toString(36).substr(2, 15);
+                localStorage.setItem('main_site_visitor_id', id);
             }
-          });
-          if (res.ok) {
-            const gist = await res.json();
-            const content = gist.files[GITHUB_CONFIG.gistFile]?.content || '{"bannedIds":[],"notice":"","stats":{"visitors":[],"pageViews":[],"allVisits":[]}}';
-            return JSON.parse(content);
-          }
-          return { bannedIds: [], notice: "", stats: { visitors: [], pageViews: [], allVisits: [] } };
-        } catch (err) {
-          console.log('读取Gist失败：', err);
-          return { bannedIds: [], notice: "", stats: { visitors: [], pageViews: [], allVisits: [] } };
-        }
-      }
-
-      // 4. 统计所有访客（核心：普通访客也触发）
-      async function reportAllVisitor() {
-        const visitorId = getVisitorId();
-        const now = new Date().toISOString();
-        const currentPage = window.location.href;
-
-        // 读取现有统计数据
-        const gistData = await loadGistData();
-        let { visitors, pageViews, allVisits } = gistData.stats;
-
-        // 1. 访客去重统计（记录每个人的访问次数）
-        const visitorIndex = visitors.findIndex(v => v.id === visitorId);
-        if (visitorIndex > -1) {
-          visitors[visitorIndex].lastVisit = now;
-          visitors[visitorIndex].visitCount = (visitors[visitorIndex].visitCount || 1) + 1;
-        } else {
-          visitors.push({
-            id: visitorId,
-            firstVisit: now,
-            lastVisit: now,
-            visitCount: 1
-          });
+            return id;
         }
 
-        // 2. 页面访问统计
-        const pageKey = currentPage.replace(BLOG_DOMAIN, '/');
-        const pageIndex = pageViews.findIndex(p => p.pageKey === pageKey);
-        if (pageIndex > -1) {
-          pageViews[pageIndex].lastVisit = now;
-          pageViews[pageIndex].visitCount = (pageViews[pageIndex].visitCount || 1) + 1;
-        } else {
-          pageViews.push({
-            pageKey: pageKey,
-            fullUrl: currentPage,
-            visitCount: 1,
-            firstVisit: now,
-            lastVisit: now
-          });
+        // 3. 读取主站统计数据
+        async function loadMainSiteStats() {
+            try {
+                const res = await fetch(`https://api.github.com/gists/${CONFIG.gistId}`, {
+                    headers: {
+                        'Authorization': `token ${CONFIG.pat}`,
+                        'Accept': 'application/vnd.github.v3+json'
+                    }
+                });
+                if (res.ok) {
+                    const gist = await res.json();
+                    // 如果没有专门的统计文件，初始化空数据
+                    const content = gist.files[CONFIG.gistFile]?.content || JSON.stringify({
+                        visitors: [], // 主站独立访客列表
+                        totalVisits: 0, // 主站总访问次数
+                        pageViews: {} // 各页面访问次数
+                    });
+                    return JSON.parse(content);
+                }
+                // 初始化空数据
+                return { visitors: [], totalVisits: 0, pageViews: {} };
+            } catch (err) {
+                console.log('读取主站统计失败：', err);
+                return { visitors: [], totalVisits: 0, pageViews: {} };
+            }
         }
 
-        // 3. 全量访问记录（每一次访问都存）
-        allVisits.push({
-          visitorId: visitorId,
-          page: currentPage,
-          time: now,
-          userAgent: navigator.userAgent // 记录设备信息
+        // 4. 核心：仅统计主站访问（彻底排除后台）
+        async function reportMainSiteVisit() {
+            // 过滤：只统计主站访问，排除后台页面
+            if (!window.location.href.startsWith(MAIN_SITE) || window.location.href.includes('blog-admin')) {
+                return; // 后台页面不统计
+            }
+
+            const visitorId = getMainSiteVisitorId();
+            const stats = await loadMainSiteStats();
+            const now = new Date().toISOString();
+            const currentPage = window.location.pathname || '/'; // 只取路径，比如/、/about/
+
+            // 1. 总访问次数+1（每一次主站访问都加）
+            stats.totalVisits += 1;
+
+            // 2. 独立访客统计（去重）
+            const isNewVisitor = !stats.visitors.some(v => v.id === visitorId);
+            if (isNewVisitor) {
+                stats.visitors.push({
+                    id: visitorId,
+                    firstVisit: now,
+                    lastVisit: now,
+                    visitCount: 1
+                });
+            } else {
+                // 老访客：更新最后访问时间+访问次数
+                const visitor = stats.visitors.find(v => v.id === visitorId);
+                visitor.lastVisit = now;
+                visitor.visitCount += 1;
+            }
+
+            // 3. 页面访问统计
+            stats.pageViews[currentPage] = stats.pageViews[currentPage] || { count: 0, lastVisit: now };
+            stats.pageViews[currentPage].count += 1;
+            stats.pageViews[currentPage].lastVisit = now;
+
+            // 保存到Gist（只存主站统计，不和后台数据混）
+            try {
+                await fetch(`https://api.github.com/gists/${CONFIG.gistId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `token ${CONFIG.pat}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        files: {
+                            [CONFIG.gistFile]: { content: JSON.stringify(stats, null, 2) }
+                        }
+                    })
+                });
+                console.log('主站访问已统计：', {
+                    visitorId: visitorId,
+                    totalVisits: stats.totalVisits,
+                    uniqueVisitors: stats.visitors.length
+                });
+            } catch (err) {
+                console.log('保存主站统计失败：', err);
+            }
+        }
+
+        // 5. 页面加载后立即触发主站统计（强制执行）
+        window.addEventListener('load', async () => {
+            await reportMainSiteVisit();
         });
 
-        // 保存统计数据到Gist
-        gistData.stats.visitors = visitors;
-        gistData.stats.pageViews = pageViews;
-        gistData.stats.allVisits = allVisits;
-
-        try {
-          await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
-            method: 'PATCH',
-            headers: {
-              'Authorization': `token ${GITHUB_CONFIG.PAT}`,
-              'Content-Type': 'application/json',
-              'Accept': 'application/vnd.github.v3+json'
-            },
-            body: JSON.stringify({
-              files: { [GITHUB_CONFIG.gistFile]: { content: JSON.stringify(gistData, null, 2) } }
-            })
-          });
-        } catch (err) {
-          console.log('统计保存失败：', err);
+        // 6. 拉黑检测（保留原有功能）
+        async function checkBanStatus() {
+            try {
+                const res = await fetch(`https://api.github.com/gists/${CONFIG.gistId}`, {
+                    headers: {
+                        'Authorization': `token ${CONFIG.pat}`,
+                        'Accept': 'application/vnd.github.v3+json'
+                    }
+                });
+                const gist = await res.json();
+                const banContent = gist.files['blog_admin.json']?.content || '{"bannedIds":[]}';
+                const banData = JSON.parse(banContent);
+                const bannedList = banData.bannedIds || [];
+                
+                if (bannedList.includes(getMainSiteVisitorId())) {
+                    document.body.innerHTML = `
+                        <div style="width: 100vw; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #f8f9fa;">
+                            <h1 style="color: #dc3545; font-size: 32px;">🚫 你已被禁止访问</h1>
+                            <p style="color: #6c757d; margin-top: 20px;">违反访问规则，联系管理员解封</p>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                console.log('拉黑检测失败：', err);
+            }
         }
-      }
-
-      // 5. 拉黑检测（防止被拉黑用户访问）
-      async function checkBanStatus() {
-        const visitorId = getVisitorId();
-        const gistData = await loadGistData();
-        const bannedList = gistData.bannedIds || [];
-        
-        if (bannedList.includes(visitorId)) {
-          document.body.innerHTML = `
-            <div style="width: 100vw; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #f8f9fa; margin: 0; padding: 0;">
-              <h1 style="color: #dc3545; font-size: 32px; margin-bottom: 20px;">🚫 You are banned from this site</h1>
-              <p style="color: #6c757d; font-size: 16px;">Reason: Violated site access rules, contact admin for unban</p>
-            </div>
-          `;
-          return false;
-        }
-        return true;
-      }
-
-      // 6. 加载公告
-      async function loadBlogNotice() {
-        const gistData = await loadGistData();
-        const noticeText = gistData.notice || "";
-        
-        if (noticeText.trim() !== "") {
-          document.getElementById('notice-text').innerText = noticeText;
-          document.getElementById('blog-notice-container').style.display = "flex";
-        }
-      }
-
-      // 7. 页面加载后强制触发所有逻辑
-      window.addEventListener('load', async () => {
-        const isNotBanned = await checkBanStatus();
-        if (isNotBanned) {
-          await reportAllVisitor(); // 统计所有访客（包括普通用户）
-          await loadBlogNotice();
-          console.log('访客统计已触发，ID：', getVisitorId());
-        }
-      });
+        checkBanStatus();
     </script>
 
-    <!-- 可关闭的公告条 -->
+    <!-- 公告条（保留） -->
     <div id="blog-notice-container" style="display: none; background: #f8d7da; color: #721c24; padding: 12px 20px; border: 1px solid #f5c6cb; border-radius: 4px; margin: 10px 0; display: flex; justify-content: space-between; align-items: center;">
-      <span id="notice-text"></span>
-      <button onclick="this.parentElement.style.display='none'" style="background: transparent; border: none; color: #721c24; cursor: pointer; font-size: 16px; padding: 0 8px; line-height: 1;">&times;</button>
+        <span id="notice-text"></span>
+        <button onclick="this.parentElement.style.display='none'" style="background: transparent; border: none; color: #721c24; cursor: pointer; font-size: 16px; padding: 0 8px; line-height: 1;">&times;</button>
     </div>
 
     {{ content }}
-
     {% include footer.html %}
-
 </body>
 </html>
