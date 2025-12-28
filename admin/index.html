@@ -194,32 +194,12 @@
     }
 
     // 读取Gist基础数据（密码+拉黑列表+公告+统计）
-    async function loadBaseData() {
-      // 先获取本地PAT
-      const token = getToken();
-      if (!token) return { pwdHash: ADMIN_PWD_HASH, bannedIds: [], notice: "", stats: { visitors: [], pageViews: [] } };
-
-      try {
-        const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
-          headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
-        });
-        if (res.ok) {
-          const gist = await res.json();
-          const content = gist.files[GIST_FILE]?.content || '{"pwdHash":"","bannedIds":[],"notice":"","stats":{"visitors":[],"pageViews":[]}}';
-          const data = JSON.parse(content);
-          ADMIN_PWD_HASH = data.pwdHash || ADMIN_PWD_HASH; // 优先用Gist里的密码哈希
-          BANNED_VISITOR_IDS = data.bannedIds || [];
-          return data;
-        } else {
-          // 首次使用：创建Gist文件
-          await initGistFile(token);
-          return { pwdHash: ADMIN_PWD_HASH, bannedIds: [], notice: "", stats: { visitors: [], pageViews: [] } };
-        }
-      } catch (err) {
-        alert('初始化数据失败：' + err.message);
-        return { pwdHash: ADMIN_PWD_HASH, bannedIds: [], notice: "", stats: { visitors: [], pageViews: [] } };
-      }
-    }
+   async function loadBaseData() {
+  // 临时强制使用本地初始密码，跳过Gist读取
+  ADMIN_PWD_HASH = "64c87cde1203e960a82f2029908f7814100e339f8b6541b69e5948f1176504e03";
+  BANNED_VISITOR_IDS = [];
+  return { pwdHash: ADMIN_PWD_HASH, bannedIds: [], notice: "", stats: { visitors: [], pageViews: [] } };
+}
 
     // 初始化Gist文件（首次使用）
     async function initGistFile(token) {
