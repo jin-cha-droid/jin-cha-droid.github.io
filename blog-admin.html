@@ -291,6 +291,11 @@
     }
 
     // 查看主站所有访客
+    <button onclick="showMainSiteStats()" class="success">查看主站真实统计</button>
+    <button onclick="clearMainSiteStats()" class="danger">清空主站统计数据</button>
+    <div id="mainSiteStatsContainer" style="margin: 15px 0;"></div>
+    <div id="mainSiteVisitorList" class="list-container" style="display: none;"></div>
+
     async function showAllMainSiteVisitors() {
       const stats = await loadMainSiteStats();
       if (!stats) return;
@@ -568,3 +573,109 @@
   </script>
 </body>
 </html>
+// ========== 新增：主站统计专用函数 ==========
+async function loadMainSiteStats() {
+    const token = document.getElementById('githubTokenInput').value.trim() || localStorage.getItem('github_gist_token');
+    if (!token) {
+        alert('请先输入/保存GitHub PAT！');
+        return null;
+    }
+    try {
+        const res = await fetch(`https://api.github.com/gists/778c919fa51dbc8b932261916da783e7`, {
+            headers: {
+                'Authorization': `token ${token}`,
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        });
+        const gist = await res.json();
+        const content = gist.files['blog_stats.json']?.content || JSON.stringify({
+            visitors: [],
+            totalVisits: 0,
+            pageViews: {}
+        });
+        return JSON.parse(content);
+    } catch (err) {
+        alert('读取主站统计失败：' + err.message);
+        return null;
+    }
+}
+
+// 查看主站统计
+async function showMainSiteStats() {
+    const stats = await loadMainSiteStats();
+    if (!stats) return;
+
+    const container = document.getElementById('mainSiteStatsContainer');
+    // 计算今日访问
+    const today = new Date().toISOString().split('T')[0];
+    const todayVisits = stats.visitors.filter(v => v.lastVisit.startsWith(today)).length;
+
+    container.innerHTML = `
+        <div class="stats-item"><strong>主站总访问次数：</strong>${stats.totalVisits} 次</div>
+        <div class="stats-item"><strong>主站独立访客数（去重）：</strong>${stats.visitors.length} 人</div>
+        <div class="stats-item"><strong>今日独立访客数：</strong>${todayVisits} 人</div>
+        <div class="stats-item"><strong>热门页面：</strong>${getHotPage(stats.pageViews)}</div>
+    `;
+
+    // 显示主站访客列表
+    const visitorList = document.getElementById('mainSiteVisitorList');
+    visitorList.style.display = 'block';
+    if (stats.visitors.length === 0) {
+        visitorList.innerHTML = '<div style="padding: 10px;">暂无主站访客记录</div>';
+        return;
+    }
+    // 按最后访问时间排序
+    stats.visitors.sort((a, b) => new Date(b.lastVisit) - new Date(a.lastVisit));
+    let html = '';
+    stats.visitors.forEach((v, i) => {
+        html += `
+            <div class="visitor-item normal">
+                <div><strong>主站访客${i+1} ID：</strong>${v.id}</div>
+                <div><strong>访问次数：</strong>${v.visitCount} 次</div>
+                <div><strong>首次访问：</strong>${new Date(v.firstVisit).toLocaleString()}</div>
+                <div><strong>最后访问：</strong>${new Date(v.lastVisit).toLocaleString()}</div>
+            </div>
+        `;
+    });
+    visitorList.innerHTML = html;
+}
+
+// 清空主站统计
+async function clearMainSiteStats() {
+    if (!confirm('确定清空主站统计数据吗？（后台数据不受影响）')) return;
+    const token = document.getElementById('githubTokenInput').value.trim() || localStorage.getItem('github_gist_token');
+    if (!token) {
+        alert('请先输入/保存GitHub PAT！');
+        return;
+    }
+    const emptyStats = { visitors: [], totalVisits: 0, pageViews: {} };
+    await fetch(`https://api.github.com/gists/778c919fa51dbc8b932261916da783e7`, {
+        method: 'PATCH',
+        headers: {
+            'Authorization': `token ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            files: {
+                'blog_stats.json': { content: JSON.stringify(emptyStats, null, 2) }
+            }
+        })
+    });
+    alert('主站统计数据已清空！');
+    showMainSiteStats();
+}
+
+// 辅助：获取热门页面
+function getHotPage(pageViews) {
+    if (Object.keys(pageViews).length === 0) return '暂无';
+    let hotPage = '';
+    let maxCount = 0;
+    for (const page in pageViews) {
+        if (pageViews[page].count > maxCount) {
+            maxCount = pageViews[page].count;
+            hotPage = `${page}（${maxCount}次）`;
+        }
+    }
+    return hotPage;
+}
+
