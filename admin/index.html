@@ -20,7 +20,7 @@
     .tip { color: #666; font-size: 12px; margin-top: 8px; line-height: 1.5; }
     .error { color: #dc3545; font-size: 14px; margin-top: 10px; display: none; }
     .success { color: #198754; font-size: 14px; margin-top: 10px; display: none; }
-    .login-box { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); max-width: 450px; margin: 100px auto; text-align: center; }
+    .login-box { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); max-width: 450px; margin: 100px auto; text-align: center; }
     .login-box h2 { margin-bottom: 25px; color: #24292e; }
     .stats-item, .visitor-item { margin: 10px 0; line-height: 1.8; padding: 8px; border-radius: 4px; background: #f8f9fa; }
     .visitor-item.banned { background: #f8d7da; border-left: 4px solid #dc3545; }
@@ -131,14 +131,13 @@
   <script>
     // ===================== 核心配置（仅保留非敏感信息）=====================
     const GITHUB_CONFIG = {
-      gistId: "778c919fa51dbc8b932261916da783e7",           // 你的Gist ID（非敏感）
-      username: "jin-cha-droid", // 你的GitHub用户名（非敏感）
-      repoName: "jin-cha-droid.github.io"        // 你的博客仓库名（非敏感）
+      gistId: "778c919fa51dbc8b932261916da783e7",           
+      username: "jin-cha-droid", 
+      repoName: "jin-cha-droid.github.io"        
     };
-    const GIST_FILE = "blog_admin.json"; // 存储所有数据的文件名（不用改）
+    const GIST_FILE = "blog_admin.json"; 
 
     // ===================== 新增：PAT本地管理 =====================
-    // 获取本地存储的PAT
     function getToken() {
       const token = localStorage.getItem('github_gist_token');
       if (!token) {
@@ -148,7 +147,6 @@
       return token;
     }
 
-    // 保存PAT到本地
     function saveToken() {
       const token = document.getElementById('githubTokenInput').value.trim();
       if (!token) {
@@ -160,7 +158,6 @@
       document.getElementById('githubTokenInput').value = '';
     }
 
-    // 清空本地PAT
     function clearToken() {
       if (confirm('确定要清空本地PAT吗？清空后统计/拉黑功能将不可用')) {
         localStorage.removeItem('github_gist_token');
@@ -168,21 +165,11 @@
       }
     }
 
-    // ===================== 1. 密码哈希验证 + 拉黑校验 =====================
-    // 初始化：先读取Gist里的密码哈希（首次使用默认哈希：admin123）
-    let ADMIN_PWD_HASH = "64c87cde1203e960a82f2029908f7814100e339f8b6541b69e5948f1176504e03";
-    let BANNED_VISITOR_IDS = []; // 拉黑的访客ID列表
-    let CURRENT_VISITOR_ID = ""; // 当前访客ID
+    // ===================== 核心修改：完全移除密码验证 =====================
+    let BANNED_VISITOR_IDS = []; 
+    let CURRENT_VISITOR_ID = ""; 
 
-    // SHA256哈希生成
-    async function sha256(str) {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(str);
-      const hash = await crypto.subtle.digest('SHA-256', data);
-      return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
-    }
-
-    // 生成当前访客唯一ID
+    // 生成访客ID
     function getCurrentVisitorId() {
       let id = localStorage.getItem('blog_visitor_id');
       if (!id) {
@@ -193,56 +180,48 @@
       return id;
     }
 
-    // 读取Gist基础数据（密码+拉黑列表+公告+统计）
-   async function loadBaseData() {
-  // 临时强制使用本地初始密码，跳过Gist读取
-  ADMIN_PWD_HASH = "64c87cde1203e960a82f2029908f7814100e339f8b6541b69e5948f1176504e03";
-  BANNED_VISITOR_IDS = [];
-  return { pwdHash: ADMIN_PWD_HASH, bannedIds: [], notice: "", stats: { visitors: [], pageViews: [] } };
-}
+    // 读取Gist数据（仅用于后续功能）
+    async function loadBaseData() {
+      const token = getToken();
+      if (!token) return { pwdHash: "", bannedIds: [], notice: "", stats: { visitors: [], pageViews: [] } };
 
-    // 初始化Gist文件（首次使用）
-    async function initGistFile(token) {
-      const initData = {
-        pwdHash: ADMIN_PWD_HASH,
-        bannedIds: [],
-        notice: "",
-        stats: { visitors: [], pageViews: [] }
-      };
-      await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `token ${token}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/vnd.github.v3+json'
-        },
-        body: JSON.stringify({
-          files: { [GIST_FILE]: { content: JSON.stringify(initData, null, 2) } }
-        })
-      });
+      try {
+        const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
+          headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+        });
+        if (res.ok) {
+          const gist = await res.json();
+          const content = gist.files[GIST_FILE]?.content || '{"pwdHash":"","bannedIds":[],"notice":"","stats":{"visitors":[],"pageViews":[]}}';
+          const data = JSON.parse(content);
+          BANNED_VISITOR_IDS = data.bannedIds || [];
+          return data;
+        } else {
+          return { pwdHash: "", bannedIds: [], notice: "", stats: { visitors: [], pageViews: [] } };
+        }
+      } catch (err) {
+        alert('初始化数据失败：' + err.message);
+        return { pwdHash: "", bannedIds: [], notice: "", stats: { visitors: [], pageViews: [] } };
+      }
     }
 
-        // 登录验证 + 拉黑校验（临时跳过所有验证，强制登录）
-    async function checkPassword() {
-      // 直接跳过所有校验，强制进入后台
+    // 登录函数：点击直接进入，无任何验证
+    function checkPassword() {
+      // 直接隐藏登录框，显示后台
       document.getElementById('loginBox').style.display = 'none';
       document.getElementById('adminContent').style.display = 'block';
       document.querySelectorAll('.module').forEach(m => m.style.display = 'block');
       
-      // 初始化基础数据，避免后续功能报错
-      ADMIN_PWD_HASH = "64c87cde1203e960a82f2029908f7814100e339f8b6541b69e5948f1176504e03";
-      BANNED_VISITOR_IDS = [];
+      // 初始化访客ID
       CURRENT_VISITOR_ID = getCurrentVisitorId();
-      
-      alert('已跳过密码校验，成功进入后台！请立即到「密码管理」模块修改密码！');
+      alert('已直接进入后台！请尽快到「密码管理」模块设置新密码！');
     }
 
-    // 按回车登录
-    document.getElementById('passwordInput').addEventListener('keydown', async (e) => {
-      if (e.key === 'Enter') await checkPassword();
+    // 按回车也直接登录
+    document.getElementById('passwordInput').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') checkPassword();
     });
 
-    // ===================== 2. 原有基础功能（签名+待办）=====================
+    // ===================== 原有功能保留 =====================
     function saveSidebarDesc() {
       const desc = document.getElementById('sidebarDesc').value;
       localStorage.setItem('sidebarDesc', desc);
@@ -264,18 +243,14 @@
       document.getElementById('todoList').value = todo;
     }
 
-    // ===================== 3. 真实访问统计核心功能 =====================
-    // 上报访问记录到Gist
     async function reportVisit(token) {
       const visitorId = CURRENT_VISITOR_ID;
       const now = new Date().toISOString();
       const currentPage = window.location.href;
 
-      // 读取现有数据
       const data = await loadBaseData();
       const stats = data.stats || { visitors: [], pageViews: [] };
 
-      // 处理访客记录（去重）
       const visitorIndex = stats.visitors.findIndex(v => v.id === visitorId);
       if (visitorIndex === -1) {
         stats.visitors.push({ id: visitorId, firstVisit: now, lastVisit: now });
@@ -283,10 +258,8 @@
         stats.visitors[visitorIndex].lastVisit = now;
       }
 
-      // 处理页面访问记录
       stats.pageViews.push({ visitorId, page: currentPage, time: now });
 
-      // 写回Gist
       data.stats = stats;
       await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
         method: 'PATCH',
@@ -301,12 +274,10 @@
       });
     }
 
-    // 展示真实统计数据
     async function showRealStats() {
       const container = document.getElementById('statsContainer');
       container.innerHTML = '<div style="color:#666;">正在获取真实数据...</div>';
 
-      // 获取本地PAT
       const token = getToken();
       if (!token) {
         container.innerHTML = '<div style="color:red;">请先在「密钥管理」模块保存你的GitHub PAT！</div>';
@@ -318,30 +289,25 @@
         const stats = data.stats || { visitors: [], pageViews: [] };
         const today = new Date().toISOString().split('T')[0];
 
-        // 计算核心指标
-        const totalVisitors = stats.visitors.length; // 总访客数（去重）
-        const todayViews = stats.pageViews.filter(p => p.time.startsWith(today)).length; // 今日访问次数
+        const totalVisitors = stats.visitors.length;
+        const todayViews = stats.pageViews.filter(p => p.time.startsWith(today)).length;
         const pageCount = {};
         stats.pageViews.forEach(p => {
           const pageName = p.page.split('/').pop() || '后台页面';
           pageCount[pageName] = (pageCount[pageName] || 0) + 1;
         });
-        // 最多访问页面
         let mostViewed = '暂无数据';
         let maxCount = 0;
         for (const p in pageCount) {
           if (pageCount[p] > maxCount) { maxCount = pageCount[p]; mostViewed = `${p}（${maxCount}次）`; }
         }
-        // 最后访问时间
         let lastVisit = '暂无数据';
         if (stats.visitors.length > 0) {
           stats.visitors.sort((a, b) => new Date(b.lastVisit) - new Date(a.lastVisit));
           lastVisit = new Date(stats.visitors[0].lastVisit).toLocaleString();
         }
-        // 拉黑人数
         const bannedCount = BANNED_VISITOR_IDS.length;
 
-        // 展示数据
         container.innerHTML = `
           <div class="stats-item"><strong>总真实访客数（去重）：</strong>${totalVisitors} 人</div>
           <div class="stats-item"><strong>今日访问次数：</strong>${todayViews} 次</div>
@@ -355,13 +321,11 @@
       }
     }
 
-    // 查看所有访客记录
     async function showAllVisitors() {
       const listContainer = document.getElementById('visitorList');
       listContainer.style.display = 'block';
       listContainer.innerHTML = '<div style="padding: 10px; color:#666;">正在加载访客记录...</div>';
 
-      // 获取本地PAT
       const token = getToken();
       if (!token) {
         listContainer.innerHTML = '<div style="padding: 10px; color:red;">请先在「密钥管理」模块保存你的GitHub PAT！</div>';
@@ -376,7 +340,6 @@
           return;
         }
 
-        // 生成访客列表（标注拉黑状态）
         let html = '';
         visitors.forEach((v, index) => {
           const isBanned = BANNED_VISITOR_IDS.includes(v.id);
@@ -395,11 +358,9 @@
       }
     }
 
-    // 清空无效统计数据
     async function clearInvalidData() {
       if (!confirm('确定要清空统计数据吗？（拉黑列表/密码/公告不会清空）')) return;
 
-      // 获取本地PAT
       const token = getToken();
       if (!token) {
         alert('请先在「密钥管理」模块保存你的GitHub PAT！');
@@ -407,7 +368,7 @@
       }
 
       const data = await loadBaseData();
-      data.stats = { visitors: [], pageViews: [] }; // 清空统计，保留其他数据
+      data.stats = { visitors: [], pageViews: [] };
 
       await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
         method: 'PATCH',
@@ -425,8 +386,6 @@
       showRealStats();
     }
 
-    // ===================== 4. 封号/拉黑功能 =====================
-    // 拉黑指定访客
     async function banVisitor() {
       const visitorId = document.getElementById('banVisitorId').value.trim();
       if (!visitorId) {
@@ -434,7 +393,6 @@
         return;
       }
 
-      // 获取本地PAT
       const token = getToken();
       if (!token) {
         alert('请先在「密钥管理」模块保存你的GitHub PAT！');
@@ -450,7 +408,6 @@
       data.bannedIds.push(visitorId);
       BANNED_VISITOR_IDS = data.bannedIds;
 
-      // 写回Gist
       await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
         method: 'PATCH',
         headers: {
@@ -465,10 +422,9 @@
 
       alert('拉黑成功！该访客将无法登录后台');
       document.getElementById('banVisitorId').value = '';
-      showAllVisitors(); // 刷新访客列表
+      showAllVisitors();
     }
 
-    // 解除拉黑
     async function unbanVisitor() {
       const visitorId = document.getElementById('banVisitorId').value.trim();
       if (!visitorId) {
@@ -476,7 +432,6 @@
         return;
       }
 
-      // 获取本地PAT
       const token = getToken();
       if (!token) {
         alert('请先在「密钥管理」模块保存你的GitHub PAT！');
@@ -492,7 +447,6 @@
       data.bannedIds = data.bannedIds.filter(id => id !== visitorId);
       BANNED_VISITOR_IDS = data.bannedIds;
 
-      // 写回Gist
       await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
         method: 'PATCH',
         headers: {
@@ -507,12 +461,10 @@
 
       alert('解除拉黑成功！');
       document.getElementById('banVisitorId').value = '';
-      showAllVisitors(); // 刷新访客列表
+      showAllVisitors();
     }
 
-    // ===================== 5. 博客公告管理 =====================
     async function saveNotice() {
-      // 获取本地PAT
       const token = getToken();
       if (!token) {
         alert('请先在「密钥管理」模块保存你的GitHub PAT！');
@@ -523,7 +475,6 @@
       const data = await loadBaseData();
       data.notice = notice;
 
-      // 写回Gist
       await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
         method: 'PATCH',
         headers: {
@@ -540,7 +491,6 @@
     }
 
     async function getNotice() {
-      // 获取本地PAT
       const token = getToken();
       if (!token) {
         alert('请先在「密钥管理」模块保存你的GitHub PAT！');
@@ -551,9 +501,7 @@
       document.getElementById('blogNotice').value = data.notice || '暂无公告';
     }
 
-    // ===================== 6. 密码修改功能 =====================
     async function changePassword() {
-      // 获取本地PAT
       const token = getToken();
       if (!token) {
         alert('请先在「密钥管理」模块保存你的GitHub PAT！');
@@ -566,11 +514,9 @@
       const pwdError = document.getElementById('pwdError');
       const pwdSuccess = document.getElementById('pwdSuccess');
 
-      // 清空提示
       pwdError.style.display = 'none';
       pwdSuccess.style.display = 'none';
 
-      // 校验
       if (!oldPwd || !newPwd || !confirmPwd) {
         pwdError.style.display = 'block';
         pwdError.innerText = '请填写所有密码字段！';
@@ -582,19 +528,16 @@
         return;
       }
 
-      // 验证原密码
-      const oldHash = await sha256(oldPwd);
-      if (oldHash !== ADMIN_PWD_HASH) {
-        pwdError.style.display = 'block';
-        pwdError.innerText = '原密码错误！';
-        return;
+      // 直接跳过原密码验证，强制修改（因为之前的密码验证已移除）
+      async function sha256(str) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(str);
+        const hash = await crypto.subtle.digest('SHA-256', data);
+        return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
       }
-
-      // 生成新密码哈希并更新到Gist
       const newHash = await sha256(newPwd);
       const data = await loadBaseData();
       data.pwdHash = newHash;
-      ADMIN_PWD_HASH = newHash;
 
       await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
         method: 'PATCH',
@@ -608,7 +551,6 @@
         })
       });
 
-      // 提示+清空输入框
       pwdSuccess.style.display = 'block';
       pwdSuccess.innerText = '密码修改成功！下次登录请用新密码';
       document.getElementById('oldPwd').value = '';
@@ -616,7 +558,6 @@
       document.getElementById('confirmPwd').value = '';
     }
 
-    // ===================== 7. 快速编辑跳转 =====================
     function openConfigFile() {
       window.open(`https://github.com/${GITHUB_CONFIG.username}/${GITHUB_CONFIG.repoName}/edit/main/_config.yml`, '_blank');
     }
@@ -627,10 +568,9 @@
       window.open(`https://gist.github.com/${GITHUB_CONFIG.username}/${GITHUB_CONFIG.gistId}`, '_blank');
     }
 
-    // 页面加载时初始化数据
     window.onload = async () => {
-      await loadBaseData(); // 加载密码+拉黑列表
-      getCurrentVisitorId(); // 生成当前访客ID
+      await loadBaseData();
+      getCurrentVisitorId();
     };
   </script>
 </body>
