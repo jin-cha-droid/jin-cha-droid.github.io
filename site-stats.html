@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>网站访客统计管理</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: "Microsoft Yahei", Arial, sans-serif; }
+    body { 
+      padding: 30px; 
+      max-width: 900px; 
+      margin: 0 auto; 
+      background-color: #f0f2f5; 
+    }
+    .container {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      padding: 30px;
+    }
+    .header {
+      font-size: 24px;
+      font-weight: 600;
+      color: #1f2937;
+      margin-bottom: 25px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .btn-group {
+      margin-bottom: 20px;
+    }
+    button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      margin-right: 10px;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background-color: #2563eb;
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background-color: #1d4ed8;
+    }
+    .btn-danger {
+      background-color: #dc2626;
+      color: #fff;
+    }
+    .btn-danger:hover {
+      background-color: #b91c1c;
+    }
+    .stats-card {
+      background: #f9fafb;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .stats-item {
+      font-size: 15px;
+      color: #374151;
+      margin: 10px 0;
+      line-height: 1.6;
+    }
+    .stats-item strong {
+      color: #111827;
+    }
+    .visitor-list {
+      max-height: 400px;
+      overflow-y: auto;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .visitor-item {
+      padding: 12px;
+      border-bottom: 1px solid #f3f4f6;
+      margin-bottom: 8px;
+      border-radius: 6px;
+      background: #f9fafb;
+    }
+    .visitor-item:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+    }
+    .visitor-item div {
+      font-size: 14px;
+      color: #4b5563;
+      margin: 4px 0;
+    }
+    .visitor-item strong {
+      color: #1f2937;
+    }
+    .empty-tip {
+      text-align: center;
+      padding: 20px;
+      color: #9ca3af;
+      font-size: 14px;
+    }
+    .config-area {
+      margin-bottom: 20px;
+      padding: 15px;
+      background: #f9fafb;
+      border-radius: 8px;
+    }
+    .config-area input {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 14px;
+      margin: 8px 0;
+    }
+    .tip-text {
+      font-size: 12px;
+      color: #6b7280;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">📊 网站访客统计管理后台</div>
+
+    <!-- 配置区域（PAT设置） -->
+    <div class="config-area">
+      <div><strong>GitHub PAT 配置（仅本地保存）</strong></div>
+      <input type="text" id="githubPatInput" placeholder="请输入仅含Gist权限的GitHub PAT（ghp_开头）">
+      <button onclick="savePat()" class="btn-primary">保存PAT到本地</button>
+      <div class="tip-text">提示：PAT仅保存在浏览器本地，不会上传，建议仅授予Gist权限以保障安全</div>
+    </div>
+
+    <!-- 操作按钮 -->
+    <div class="btn-group">
+      <button onclick="loadSiteStats()" class="btn-primary">刷新访客统计</button>
+      <button onclick="clearSiteStats()" class="btn-danger">清空所有统计数据</button>
+    </div>
+
+    <!-- 统计概览 -->
+    <div class="stats-card">
+      <div id="statsOverview"></div>
+    </div>
+
+    <!-- 访客列表 -->
+    <div><strong>访客明细列表</strong></div>
+    <div id="visitorList" class="visitor-list"></div>
+  </div>
+
+  <script>
+    // 核心配置（无需修改）
+    const CONFIG = {
+      gistId: "778c919fa51dbc8b932261916da783e7",
+      statsFileName: "blog_stats.json",
+      mainSiteDomain: "https://jin-cha-droid.github.io/"
+    };
+
+    // ========== PAT 本地管理 ==========
+    function getSavedPat() {
+      // 优先读取本地存储，其次读取输入框
+      return localStorage.getItem('site_stats_pat') || document.getElementById('githubPatInput').value.trim();
+    }
+
+    function savePat() {
+      const pat = document.getElementById('githubPatInput').value.trim();
+      if (!pat || !pat.startsWith('ghp_')) {
+        alert('请输入有效的GitHub PAT（以ghp_开头）！');
+        return;
+      }
+      localStorage.setItem('site_stats_pat', pat);
+      alert('PAT已成功保存到本地！下次无需重复输入');
+      document.getElementById('githubPatInput').value = '';
+    }
+
+    // ========== 核心统计功能 ==========
+    // 加载统计数据
+    async function loadSiteStats() {
+      const pat = getSavedPat();
+      if (!pat) {
+        alert('请先配置并保存GitHub PAT！');
+        return;
+      }
+
+      try {
+        // 1. 获取Gist数据
+        const gistRes = await fetch(`https://api.github.com/gists/${CONFIG.gistId}`, {
+          headers: {
+            'Authorization': `token ${pat}`,
+            'Accept': 'application/vnd.github.v3+json'
+          }
+        });
+
+        if (!gistRes.ok) {
+          throw new Error(`Gist请求失败：${gistRes.status}`);
+        }
+
+        const gistData = await gistRes.json();
+        // 2. 解析统计数据（无数据则初始化）
+        const statsContent = gistData.files[CONFIG.statsFileName]?.content || JSON.stringify({
+          visitors: [],    // 独立访客列表
+          totalVisits: 0,  // 总访问次数
+          pageViews: {}    // 页面访问统计
+        });
+        const stats = JSON.parse(statsContent);
+
+        // 3. 计算今日数据
+        const today = new Date().toISOString().split('T')[0];
+        const todayUniqueVisitors = stats.visitors.filter(v => v.lastVisit.startsWith(today)).length;
+        let todayTotalVisits = 0;
+        stats.visitors.forEach(v => {
+          if (v.lastVisit.startsWith(today)) {
+            todayTotalVisits += v.visitCount;
+          }
+        });
+
+        // 4. 渲染统计概览
+        document.getElementById('statsOverview').innerHTML = `
+          <div class="stats-item"><strong>总访问次数：</strong>${stats.totalVisits} 次</div>
+          <div class="stats-item"><strong>独立访客数（去重）：</strong>${stats.visitors.length} 人</div>
+          <div class="stats-item"><strong>今日独立访客数：</strong>${todayUniqueVisitors} 人</div>
+          <div class="stats-item"><strong>今日总访问次数：</strong>${todayTotalVisits} 次</div>
+          <div class="stats-item"><strong>热门页面：</strong>${getHotPage(stats.pageViews)}</div>
+        `;
+
+        // 5. 渲染访客列表
+        renderVisitorList(stats.visitors);
+
+      } catch (error) {
+        alert(`加载统计数据失败：${error.message}`);
+        console.error('统计加载错误：', error);
+      }
+    }
+
+    // 渲染访客列表
+    function renderVisitorList(visitors) {
+      const listEl = document.getElementById('visitorList');
+      
+      if (visitors.length === 0) {
+        listEl.innerHTML = '<div class="empty-tip">暂无访客数据</div>';
+        return;
+      }
+
+      // 按最后访问时间倒序排序
+      visitors.sort((a, b) => new Date(b.lastVisit) - new Date(a.lastVisit));
+      
+      let listHtml = '';
+      visitors.forEach((visitor, index) => {
+        listHtml += `
+          <div class="visitor-item">
+            <div><strong>访客 ${index + 1}</strong> | ID：${visitor.id}</div>
+            <div>累计访问次数：${visitor.visitCount} 次</div>
+            <div>首次访问时间：${formatTime(visitor.firstVisit)}</div>
+            <div>最后访问时间：${formatTime(visitor.lastVisit)}</div>
+          </div>
+        `;
+      });
+      listEl.innerHTML = listHtml;
+    }
+
+    // 清空统计数据
+    async function clearSiteStats() {
+      if (!confirm('⚠️ 确定要清空所有访客统计数据吗？此操作不可恢复！')) {
+        return;
+      }
+
+      const pat = getSavedPat();
+      if (!pat) {
+        alert('请先配置并保存GitHub PAT！');
+        return;
+      }
+
+      try {
+        // 初始化空统计数据
+        const emptyStats = {
+          visitors: [],
+          totalVisits: 0,
+          pageViews: {}
+        };
+
+        // 提交到Gist
+        const res = await fetch(`https://api.github.com/gists/${CONFIG.gistId}`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `token ${pat}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            files: {
+              [CONFIG.statsFileName]: {
+                content: JSON.stringify(emptyStats, null, 2)
+              }
+            }
+          })
+        });
+
+        if (res.ok) {
+          alert('统计数据已成功清空！');
+          loadSiteStats(); // 重新加载空数据
+        } else {
+          throw new Error(`清空失败：${res.status}`);
+        }
+      } catch (error) {
+        alert(`清空统计数据失败：${error.message}`);
+        console.error('清空错误：', error);
+      }
+    }
+
+    // ========== 辅助函数 ==========
+    // 格式化时间
+    function formatTime(timeStr) {
+      if (!timeStr) return '未知';
+      return new Date(timeStr).toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    }
+
+    // 获取热门页面
+    function getHotPage(pageViews) {
+      if (!pageViews || Object.keys(pageViews).length === 0) {
+        return '暂无数据';
+      }
+
+      let hotPage = '';
+      let maxCount = 0;
+      for (const page in pageViews) {
+        if (pageViews[page].count > maxCount) {
+          maxCount = pageViews[page].count;
+          hotPage = `${page}（${maxCount}次访问）`;
+        }
+      }
+      return hotPage;
+    }
+
+    // ========== 初始化 ==========
+    // 页面加载时自动读取本地PAT并加载统计
+    window.onload = function() {
+      const savedPat = localStorage.getItem('site_stats_pat');
+      if (savedPat) {
+        // 有保存的PAT则自动加载统计
+        loadSiteStats();
+      }
+    };
+  </script>
+</body>
+</html>
