@@ -9,10 +9,69 @@
     {% include nav.html %}
     {% include search.html %}
 
-    {{ content }}
+    <!-- ########## 新增：拉黑检测核心代码 ########## -->
+    <script>
+      // 1. 配置Gist信息（和后台保持一致）
+      const GITHUB_CONFIG = {
+        gistId: "778c919fa51dbc8b932261916da783e7",
+        gistFile: "blog_admin.json"
+      };
+
+      // 2. 生成和后台一致的访客ID（确保拉黑ID匹配）
+      function getVisitorId() {
+        let id = localStorage.getItem('blog_visitor_id');
+        if (!id) {
+          // 生成规则：和后台完全一致，保证拉黑ID精准匹配
+          id = Date.now() + '_' + Math.random().toString(36).substr(2, 10) + '_' + navigator.userAgent.substring(0, 15);
+          localStorage.setItem('blog_visitor_id', id);
+        }
+        return id;
+      }
+
+      // 3. 从Gist读取拉黑列表（公开Gist版本，无需PAT）
+      async function getBannedList() {
+        try {
+          const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`);
+          if (res.ok) {
+            const gist = await res.json();
+            const content = gist.files[GITHUB_CONFIG.gistFile]?.content || '{"bannedIds":[]}';
+            const data = JSON.parse(content);
+            return data.bannedIds || [];
+          }
+          return [];
+        } catch (err) {
+          console.log('读取拉黑列表失败：', err);
+          return [];
+        }
+      }
+
+      // 4. 核心拦截逻辑：检测拉黑状态并阻止访问
+      async function checkBanStatus() {
+        const visitorId = getVisitorId();
+        const bannedList = await getBannedList();
+        
+        // 检测到拉黑ID，立即拦截
+        if (bannedList.includes(visitorId)) {
+          // 替换整个页面内容，彻底阻止访问
+          document.body.innerHTML = `
+            <div style="width: 100vw; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #f8f9fa; margin: 0; padding: 0;">
+              <h1 style="color: #dc3545; font-size: 32px; margin-bottom: 20px;">🚫 You are banned from this site</h1>
+              <p style="color: #6c757d; font-size: 16px;">Reason: Violated site access rules, contact admin for unban</p>
+            </div>
+          `;
+          return false;
+        }
+        return true;
+      }
+
+      // 5. 页面加载时立即执行检测（最高优先级）
+      checkBanStatus();
+    </script>
+    <!-- ########## 拉黑检测代码结束 ########## -->
+
+    {{ content }}  <!-- 博客正文，拉黑用户看不到这里的内容 -->
 
     {% include footer.html %}
-
 
 <!-- Image to hack wechat -->
 <img src="/img/icon_wechat.png" width="0" height="0" />
