@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>博客后台管理（无服务器版）</title>
+  <title>博客后台管理（主站统计专用版）</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: "Microsoft Yahei", Arial, sans-serif; }
     body { padding: 20px; max-width: 1200px; margin: 0 auto; background: #f5f5f5; }
@@ -44,7 +44,7 @@
 
   <!-- 后台主内容（默认隐藏） -->
   <div id="adminContent" style="display: none;">
-    <div class="header">博客后台管理系统（无服务器版）</div>
+    <div class="header">博客后台管理系统（主站统计专用版）</div>
 
     <!-- 密钥管理 -->
     <div class="module">
@@ -77,24 +77,23 @@
       </div>
     </div>
 
-    <!-- 访问统计 & 访客管理 -->
+    <!-- 核心：主站访问统计 + 访客管理 -->
     <div class="module">
-      <div class="module-title">📊 访问统计 & 访客管理（封号/拉黑）</div>
-      <button onclick="showRealStats()" class="success">获取真实统计数据</button>
-      <button onclick="showAllVisitors()">查看所有访客记录</button>
-      <button onclick="showAllPageViews()">查看所有页面访问记录</button>
-      <button onclick="clearInvalidData()" class="danger">清空无效统计数据</button>
-      <div id="statsContainer" style="margin: 15px 0;"></div>
+      <div class="module-title">📊 主站访问统计（核心）</div>
+      <button onclick="showMainSiteStats()" class="success">查看主站真实统计</button>
+      <button onclick="clearMainSiteStats()" class="danger">清空主站统计数据</button>
+      <button onclick="showAllMainSiteVisitors()" class="success">查看主站所有访客</button>
+      <div id="mainSiteStatsContainer" style="margin: 15px 0;"></div>
+      <div id="mainSiteVisitorList" class="list-container" style="display: none;"></div>
       
-      <div id="visitorList" class="list-container" style="display: none;"></div>
-      <div id="pageViewList" class="list-container" style="display: none;"></div>
-      
+      <!-- 拉黑管理 -->
       <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
-        <label>手动拉黑访客ID（输入ID后点击拉黑）</label>
-        <input type="text" id="banVisitorId" placeholder="粘贴要拉黑的访客ID">
-        <button onclick="banVisitor()" class="danger">拉黑该访客</button>
-        <button onclick="unbanVisitor()" class="success">解除拉黑</button>
-        <div class="tip">拉黑后，该访客无法登录后台+禁止访问博客</div>
+        <div class="module-title">🚫 访客拉黑管理</div>
+        <label>输入主站访客ID进行拉黑/解封</label>
+        <input type="text" id="banVisitorId" placeholder="粘贴主站访客ID（以MAIN_开头）">
+        <button onclick="banMainSiteVisitor()" class="danger">拉黑该访客</button>
+        <button onclick="unbanMainSiteVisitor()" class="success">解除拉黑</button>
+        <div class="tip">拉黑后，该访客无法访问主站和后台</div>
       </div>
     </div>
 
@@ -130,24 +129,26 @@
   </div>
 
   <script>
-    // 核心配置
+    // ===================== 核心配置 =====================
     const GITHUB_CONFIG = {
       gistId: "778c919fa51dbc8b932261916da783e7",           
       username: "jin-cha-droid", 
-      repoName: "jin-cha-droid.github.io"        
+      repoName: "jin-cha-droid.github.io",
+      mainSiteStatsFile: "blog_stats.json", // 主站统计专用文件
+      adminDataFile: "blog_admin.json"      // 后台/拉黑数据文件
     };
-    const GIST_FILE = "blog_admin.json"; 
-    const BLOG_DOMAIN = "https://jin-cha-droid.github.io/";
+    const MAIN_SITE_DOMAIN = "https://jin-cha-droid.github.io/";
 
-    // PAT本地管理
+    // ===================== PAT本地管理 =====================
     function getToken() {
-      const token = localStorage.getItem('github_gist_token');
+      const token = localStorage.getItem('github_gist_token') || document.getElementById('githubTokenInput').value.trim();
       if (!token) {
         alert('请先在「密钥管理」模块输入并保存你的GitHub PAT！');
         return null;
       }
       return token;
     }
+
     function saveToken() {
       const token = document.getElementById('githubTokenInput').value.trim();
       if (!token) {
@@ -158,16 +159,18 @@
       alert('PAT已成功保存到本地！');
       document.getElementById('githubTokenInput').value = '';
     }
+
     function clearToken() {
-      if (confirm('确定要清空本地PAT吗？')) {
+      if (confirm('确定要清空本地PAT吗？清空后统计/拉黑功能将不可用')) {
         localStorage.removeItem('github_gist_token');
         alert('本地PAT已清空！');
       }
     }
 
-    // 登录逻辑
+    // ===================== 登录验证 =====================
     let BANNED_VISITOR_IDS = []; 
     let CURRENT_VISITOR_ID = ""; 
+
     function getCurrentVisitorId() {
       let id = localStorage.getItem('blog_visitor_id');
       if (!id) {
@@ -177,40 +180,44 @@
       CURRENT_VISITOR_ID = id;
       return id;
     }
-    async function loadBaseData() {
+
+    async function loadAdminData() {
       const token = getToken();
-      if (!token) return { pwdHash: "", bannedIds: [], notice: "", stats: { visitors: [], pageViews: [], allVisits: [] } };
+      if (!token) return { pwdHash: "", bannedIds: [], notice: "" };
+
       try {
         const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
           headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
         });
         if (res.ok) {
           const gist = await res.json();
-          const content = gist.files[GIST_FILE]?.content || '{"pwdHash":"","bannedIds":[],"notice":"","stats":{"visitors":[],"pageViews":[],"allVisits":[]}}';
+          const content = gist.files[GITHUB_CONFIG.adminDataFile]?.content || '{"pwdHash":"","bannedIds":[],"notice":""}';
           const data = JSON.parse(content);
           BANNED_VISITOR_IDS = data.bannedIds || [];
           return data;
+        } else {
+          return { pwdHash: "", bannedIds: [], notice: "" };
         }
-        return { pwdHash: "", bannedIds: [], notice: "", stats: { visitors: [], pageViews: [], allVisits: [] } };
       } catch (err) {
         alert('初始化数据失败：' + err.message);
-        return { pwdHash: "", bannedIds: [], notice: "", stats: { visitors: [], pageViews: [], allVisits: [] } };
+        return { pwdHash: "", bannedIds: [], notice: "" };
       }
     }
+
     async function checkPassword() {
       getCurrentVisitorId();
-      await loadBaseData();
+      await loadAdminData();
+
       if (BANNED_VISITOR_IDS.includes(CURRENT_VISITOR_ID)) {
         document.getElementById('loginError').style.display = 'block';
         document.getElementById('loginError').innerText = '你已被拉黑，禁止登录！';
         return;
       }
+
       const inputPwd = document.getElementById('passwordInput').value;
       const token = getToken();
-      if (!token) {
-        alert('请先在「密钥管理」模块保存GitHub PAT！');
-        return;
-      }
+      if (!token) return;
+
       async function sha256(str) {
         const encoder = new TextEncoder();
         const data = encoder.encode(str);
@@ -218,200 +225,160 @@
         return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
       }
       const inputHash = await sha256(inputPwd);
-      const data = await loadBaseData();
+      const data = await loadAdminData();
       const correctHash = data.pwdHash || "";
+
       if (inputHash === correctHash && correctHash !== "") {
         document.getElementById('loginBox').style.display = 'none';
         document.getElementById('adminContent').style.display = 'block';
         document.querySelectorAll('.module').forEach(m => m.style.display = 'block');
-        reportVisit(token);
       } else {
         document.getElementById('loginError').style.display = 'block';
         document.getElementById('passwordInput').value = '';
       }
     }
+
     document.getElementById('passwordInput').addEventListener('keydown', async function(e) {
       if (e.key === 'Enter') await checkPassword();
     });
 
-    // 访问统计
-    async function reportVisit(token) {
-      const visitorId = CURRENT_VISITOR_ID;
-      const now = new Date().toISOString();
-      const currentPage = window.location.href;
-      const data = await loadBaseData();
-      const stats = data.stats || { visitors: [], pageViews: [], allVisits: [] };
-      const visitorIndex = stats.visitors.findIndex(v => v.id === visitorId);
-      if (visitorIndex === -1) {
-        stats.visitors.push({ id: visitorId, firstVisit: now, lastVisit: now, visitCount: 1 });
-      } else {
-        stats.visitors[visitorIndex].lastVisit = now;
-        stats.visitors[visitorIndex].visitCount = (stats.visitors[visitorIndex].visitCount || 1) + 1;
-      }
-      const pageKey = currentPage.replace(BLOG_DOMAIN, '/');
-      const pageIndex = stats.pageViews.findIndex(p => p.pageKey === pageKey);
-      if (pageIndex === -1) {
-        stats.pageViews.push({ pageKey: pageKey, fullUrl: currentPage, visitCount: 1, firstVisit: now, lastVisit: now });
-      } else {
-        stats.pageViews[pageIndex].lastVisit = now;
-        stats.pageViews[pageIndex].visitCount = (stats.pageViews[pageIndex].visitCount || 1) + 1;
-      }
-      stats.allVisits.push({ visitorId: visitorId, page: currentPage, time: now, userAgent: navigator.userAgent });
-      data.stats = stats;
-      await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `token ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          files: { [GIST_FILE]: { content: JSON.stringify(data, null, 2) } }
-        })
-      });
-    }
-    async function showRealStats() {
-      const container = document.getElementById('statsContainer');
-      container.innerHTML = '<div style="color:#666;">正在获取真实数据...</div>';
+    // ===================== 核心：主站统计功能 =====================
+    async function loadMainSiteStats() {
       const token = getToken();
-      if (!token) {
-        container.innerHTML = '<div style="color:red;">请先保存PAT！</div>';
-        return;
-      }
+      if (!token) return null;
+
       try {
-        const data = await loadBaseData();
-        const stats = data.stats || { visitors: [], pageViews: [], allVisits: [] };
-        const today = new Date().toISOString().split('T')[0];
-        const totalUniqueVisitors = stats.visitors.length;
-        const totalVisitTimes = stats.allVisits.length;
-        const todayVisits = stats.allVisits.filter(p => p.time.startsWith(today)).length;
-        const bannedCount = BANNED_VISITOR_IDS.length;
-        let hotPage = '暂无数据';
-        if (stats.pageViews.length > 0) {
-          stats.pageViews.sort((a, b) => b.visitCount - a.visitCount);
-          hotPage = `${stats.pageViews[0].pageKey}（${stats.pageViews[0].visitCount}次）`;
-        }
-        container.innerHTML = `
-          <div class="stats-item"><strong>总独立访客数：</strong>${totalUniqueVisitors} 人</div>
-          <div class="stats-item"><strong>总访问次数：</strong>${totalVisitTimes} 次</div>
-          <div class="stats-item"><strong>今日访问次数：</strong>${todayVisits} 次</div>
-          <div class="stats-item"><strong>最热门页面：</strong>${hotPage}</div>
-          <div class="stats-item"><strong>已拉黑访客数：</strong>${bannedCount} 人</div>
-        `;
-      } catch (err) {
-        container.innerHTML = `<div style="color:red;">获取失败：${err.message}</div>`;
-      }
-    }
-    async function showAllVisitors() {
-      const listContainer = document.getElementById('visitorList');
-      listContainer.style.display = 'block';
-      listContainer.innerHTML = '<div style="padding: 10px; color:#666;">正在加载...</div>';
-      const token = getToken();
-      if (!token) {
-        listContainer.innerHTML = '<div style="color:red;">请先保存PAT！</div>';
-        return;
-      }
-      try {
-        const data = await loadBaseData();
-        const visitors = data.stats?.visitors || [];
-        if (visitors.length === 0) {
-          listContainer.innerHTML = '<div style="padding: 10px;">暂无访客记录</div>';
-          return;
-        }
-        visitors.sort((a, b) => new Date(b.lastVisit) - new Date(a.lastVisit));
-        let html = '';
-        visitors.forEach((v, index) => {
-          const isBanned = BANNED_VISITOR_IDS.includes(v.id);
-          html += `
-            <div class="visitor-item ${isBanned ? 'banned' : 'normal'}">
-              <div><strong>访客${index+1} ID：</strong>${v.id}</div>
-              <div><strong>访问次数：</strong>${v.visitCount || 1} 次</div>
-              <div><strong>首次访问：</strong>${new Date(v.firstVisit).toLocaleString()}</div>
-              <div><strong>最后访问：</strong>${new Date(v.lastVisit).toLocaleString()}</div>
-              <div><strong>状态：</strong>${isBanned ? '<span style="color:#dc3545;">已拉黑</span>' : '<span style="color:#198754;">正常</span>'}</div>
-            </div>
-          `;
+        const res = await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
+          headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
         });
-        listContainer.innerHTML = html;
-      } catch (err) {
-        listContainer.innerHTML = `<div style="color:red;">加载失败：${err.message}</div>`;
-      }
-    }
-    async function showAllPageViews() {
-      const listContainer = document.getElementById('pageViewList');
-      listContainer.style.display = 'block';
-      listContainer.innerHTML = '<div style="padding: 10px; color:#666;">正在加载...</div>';
-      const token = getToken();
-      if (!token) {
-        listContainer.innerHTML = '<div style="color:red;">请先保存PAT！</div>';
-        return;
-      }
-      try {
-        const data = await loadBaseData();
-        const pageViews = data.stats?.pageViews || [];
-        if (pageViews.length === 0) {
-          listContainer.innerHTML = '<div style="padding: 10px;">暂无页面记录</div>';
-          return;
-        }
-        pageViews.sort((a, b) => b.visitCount - a.visitCount);
-        let html = '';
-        pageViews.forEach((p, index) => {
-          html += `
-            <div class="stats-item">
-              <div><strong>页面${index+1}：</strong>${p.pageKey}</div>
-              <div><strong>访问次数：</strong>${p.visitCount || 1} 次</div>
-              <div><strong>首次访问：</strong>${new Date(p.firstVisit).toLocaleString()}</div>
-              <div><strong>最后访问：</strong>${new Date(p.lastVisit).toLocaleString()}</div>
-              <div class="visit-detail">完整URL：${p.fullUrl}</div>
-            </div>
-          `;
+        const gist = await res.json();
+        const content = gist.files[GITHUB_CONFIG.mainSiteStatsFile]?.content || JSON.stringify({
+          visitors: [],
+          totalVisits: 0,
+          pageViews: {}
         });
-        listContainer.innerHTML = html;
+        return JSON.parse(content);
       } catch (err) {
-        listContainer.innerHTML = `<div style="color:red;">加载失败：${err.message}</div>`;
+        alert('读取主站统计失败：' + err.message);
+        return null;
       }
-    }
-    async function clearInvalidData() {
-      if (!confirm('确定要清空统计数据吗？')) return;
-      const token = getToken();
-      if (!token) {
-        alert('请先保存PAT！');
-        return;
-      }
-      const data = await loadBaseData();
-      data.stats = { visitors: [], pageViews: [], allVisits: [] };
-      await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `token ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          files: { [GIST_FILE]: { content: JSON.stringify(data, null, 2) } }
-        })
-      });
-      alert('统计数据已清空！');
-      showRealStats();
     }
 
-    // 访客拉黑/解除
-    async function banVisitor() {
+    // 查看主站核心统计
+    async function showMainSiteStats() {
+      const stats = await loadMainSiteStats();
+      if (!stats) return;
+
+      const container = document.getElementById('mainSiteStatsContainer');
+      const today = new Date().toISOString().split('T')[0];
+      // 今日独立访客数
+      const todayUniqueVisitors = stats.visitors.filter(v => v.lastVisit.startsWith(today)).length;
+      // 今日总访问次数
+      let todayTotalVisits = 0;
+      stats.visitors.forEach(v => {
+        if (v.lastVisit.startsWith(today)) todayTotalVisits += v.visitCount;
+      });
+      // 热门页面
+      const hotPage = getHotPage(stats.pageViews);
+
+      container.innerHTML = `
+        <div class="stats-item"><strong>主站总访问次数（所有访客）：</strong>${stats.totalVisits} 次</div>
+        <div class="stats-item"><strong>主站独立访客数（去重）：</strong>${stats.visitors.length} 人</div>
+        <div class="stats-item"><strong>今日独立访客数：</strong>${todayUniqueVisitors} 人</div>
+        <div class="stats-item"><strong>今日总访问次数：</strong>${todayTotalVisits} 次</div>
+        <div class="stats-item"><strong>最热门页面：</strong>${hotPage}</div>
+      `;
+    }
+
+    // 查看主站所有访客
+    async function showAllMainSiteVisitors() {
+      const stats = await loadMainSiteStats();
+      if (!stats) return;
+
+      const listContainer = document.getElementById('mainSiteVisitorList');
+      listContainer.style.display = 'block';
+
+      if (stats.visitors.length === 0) {
+        listContainer.innerHTML = '<div style="padding: 10px;">暂无主站访客记录</div>';
+        return;
+      }
+
+      stats.visitors.sort((a, b) => new Date(b.lastVisit) - new Date(a.firstVisit));
+      let html = '';
+      stats.visitors.forEach((v, index) => {
+        const isBanned = BANNED_VISITOR_IDS.includes(v.id);
+        html += `
+          <div class="visitor-item ${isBanned ? 'banned' : 'normal'}">
+            <div><strong>主站访客${index+1} ID：</strong>${v.id}</div>
+            <div><strong>累计访问次数：</strong>${v.visitCount} 次</div>
+            <div><strong>首次访问时间：</strong>${new Date(v.firstVisit).toLocaleString()}</div>
+            <div><strong>最后访问时间：</strong>${new Date(v.lastVisit).toLocaleString()}</div>
+            <div><strong>状态：</strong>${isBanned ? '<span style="color:#dc3545;">已拉黑</span>' : '<span style="color:#198754;">正常</span>'}</div>
+          </div>
+        `;
+      });
+      listContainer.innerHTML = html;
+    }
+
+    // 清空主站统计
+    async function clearMainSiteStats() {
+      if (!confirm('确定清空主站统计数据吗？（拉黑/公告数据不受影响）')) return;
+      const token = getToken();
+      if (!token) return;
+
+      const emptyStats = { visitors: [], totalVisits: 0, pageViews: {} };
+      await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `token ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          files: {
+            [GITHUB_CONFIG.mainSiteStatsFile]: { content: JSON.stringify(emptyStats, null, 2) }
+          }
+        })
+      });
+
+      alert('主站统计数据已清空！');
+      showMainSiteStats();
+      showAllMainSiteVisitors();
+    }
+
+    // 辅助：获取热门页面
+    function getHotPage(pageViews) {
+      if (Object.keys(pageViews).length === 0) return '暂无数据';
+      let hotPage = '';
+      let maxCount = 0;
+      for (const page in pageViews) {
+        if (pageViews[page].count > maxCount) {
+          maxCount = pageViews[page].count;
+          hotPage = `${page}（${maxCount}次访问）`;
+        }
+      }
+      return hotPage;
+    }
+
+    // ===================== 主站访客拉黑/解封 =====================
+    async function banMainSiteVisitor() {
       const visitorId = document.getElementById('banVisitorId').value.trim();
       if (!visitorId) {
-        alert('请输入要拉黑的访客ID！');
+        alert('请输入要拉黑的主站访客ID！');
         return;
       }
+
       const token = getToken();
-      if (!token) {
-        alert('请先保存PAT！');
-        return;
-      }
-      const data = await loadBaseData();
-      if (data.bannedIds.includes(visitorId)) {
+      if (!token) return;
+
+      const adminData = await loadAdminData();
+      if (adminData.bannedIds.includes(visitorId)) {
         alert('该访客已被拉黑！');
         return;
       }
-      data.bannedIds.push(visitorId);
-      BANNED_VISITOR_IDS = data.bannedIds;
+
+      adminData.bannedIds.push(visitorId);
+      BANNED_VISITOR_IDS = adminData.bannedIds;
+
       await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
         method: 'PATCH',
         headers: {
@@ -419,31 +386,34 @@
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          files: { [GIST_FILE]: { content: JSON.stringify(data, null, 2) } }
+          files: { [GITHUB_CONFIG.adminDataFile]: { content: JSON.stringify(adminData, null, 2) } }
         })
       });
-      alert('拉黑成功！');
+
+      alert('拉黑成功！该访客将无法访问主站和后台');
       document.getElementById('banVisitorId').value = '';
-      showAllVisitors();
+      showAllMainSiteVisitors();
     }
-    async function unbanVisitor() {
+
+    async function unbanMainSiteVisitor() {
       const visitorId = document.getElementById('banVisitorId').value.trim();
       if (!visitorId) {
-        alert('请输入要解除拉黑的访客ID！');
+        alert('请输入要解除拉黑的主站访客ID！');
         return;
       }
+
       const token = getToken();
-      if (!token) {
-        alert('请先保存PAT！');
-        return;
-      }
-      const data = await loadBaseData();
-      if (!data.bannedIds.includes(visitorId)) {
+      if (!token) return;
+
+      const adminData = await loadAdminData();
+      if (!adminData.bannedIds.includes(visitorId)) {
         alert('该访客未被拉黑！');
         return;
       }
-      data.bannedIds = data.bannedIds.filter(id => id !== visitorId);
-      BANNED_VISITOR_IDS = data.bannedIds;
+
+      adminData.bannedIds = adminData.bannedIds.filter(id => id !== visitorId);
+      BANNED_VISITOR_IDS = adminData.bannedIds;
+
       await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
         method: 'PATCH',
         headers: {
@@ -451,24 +421,24 @@
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          files: { [GIST_FILE]: { content: JSON.stringify(data, null, 2) } }
+          files: { [GITHUB_CONFIG.adminDataFile]: { content: JSON.stringify(adminData, null, 2) } }
         })
       });
+
       alert('解除拉黑成功！');
       document.getElementById('banVisitorId').value = '';
-      showAllVisitors();
+      showAllMainSiteVisitors();
     }
 
-    // 公告管理
+    // ===================== 公告管理 =====================
     async function saveNotice() {
       const token = getToken();
-      if (!token) {
-        alert('请先保存PAT！');
-        return;
-      }
+      if (!token) return;
+
       const notice = document.getElementById('blogNotice').value;
-      const data = await loadBaseData();
-      data.notice = notice;
+      const adminData = await loadAdminData();
+      adminData.notice = notice;
+
       await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
         method: 'PATCH',
         headers: {
@@ -476,35 +446,35 @@
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          files: { [GIST_FILE]: { content: JSON.stringify(data, null, 2) } }
+          files: { [GITHUB_CONFIG.adminDataFile]: { content: JSON.stringify(adminData, null, 2) } }
         })
       });
+
       alert('公告保存成功！');
     }
+
     async function getNotice() {
       const token = getToken();
-      if (!token) {
-        alert('请先保存PAT！');
-        return;
-      }
-      const data = await loadBaseData();
-      document.getElementById('blogNotice').value = data.notice || '暂无公告';
+      if (!token) return;
+
+      const adminData = await loadAdminData();
+      document.getElementById('blogNotice').value = adminData.notice || '暂无公告';
     }
 
-    // 密码修改
+    // ===================== 密码修改 =====================
     async function changePassword() {
       const token = getToken();
-      if (!token) {
-        alert('请先保存PAT！');
-        return;
-      }
+      if (!token) return;
+
       const oldPwd = document.getElementById('oldPwd').value;
       const newPwd = document.getElementById('newPwd').value;
       const confirmPwd = document.getElementById('confirmPwd').value;
       const pwdError = document.getElementById('pwdError');
       const pwdSuccess = document.getElementById('pwdSuccess');
+
       pwdError.style.display = 'none';
       pwdSuccess.style.display = 'none';
+
       if (!oldPwd || !newPwd || !confirmPwd) {
         pwdError.style.display = 'block';
         pwdError.innerText = '请填写所有密码字段！';
@@ -515,6 +485,7 @@
         pwdError.innerText = '新密码和确认密码不一致！';
         return;
       }
+
       async function sha256(str) {
         const encoder = new TextEncoder();
         const data = encoder.encode(str);
@@ -522,15 +493,18 @@
         return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
       }
       const oldHash = await sha256(oldPwd);
-      const data = await loadBaseData();
-      const correctHash = data.pwdHash || "";
+      const adminData = await loadAdminData();
+      const correctHash = adminData.pwdHash || "";
+
       if (oldHash !== correctHash) {
         pwdError.style.display = 'block';
         pwdError.innerText = '原密码错误！';
         return;
       }
+
       const newHash = await sha256(newPwd);
-      data.pwdHash = newHash;
+      adminData.pwdHash = newHash;
+
       await fetch(`https://api.github.com/gists/${GITHUB_CONFIG.gistId}`, {
         method: 'PATCH',
         headers: {
@@ -538,51 +512,57 @@
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          files: { [GIST_FILE]: { content: JSON.stringify(data, null, 2) } }
+          files: { [GITHUB_CONFIG.adminDataFile]: { content: JSON.stringify(adminData, null, 2) } }
         })
       });
+
       pwdSuccess.style.display = 'block';
-      pwdSuccess.innerText = '密码修改成功！';
+      pwdSuccess.innerText = '密码修改成功！下次登录请用新密码';
       document.getElementById('oldPwd').value = '';
       document.getElementById('newPwd').value = '';
       document.getElementById('confirmPwd').value = '';
     }
 
-    // 基础设置
+    // ===================== 基础设置 =====================
     function saveSidebarDesc() {
       const desc = document.getElementById('sidebarDesc').value;
       localStorage.setItem('sidebarDesc', desc);
       alert('签名保存成功！');
     }
+
     function getSidebarDesc() {
       const desc = localStorage.getItem('sidebarDesc') || '暂无签名';
       document.getElementById('sidebarDesc').value = desc;
     }
+
     function saveTodo() {
       const todo = document.getElementById('todoList').value;
       localStorage.setItem('blogTodo', todo);
       alert('待办保存成功！');
       getTodo();
     }
+
     function getTodo() {
       const todo = localStorage.getItem('blogTodo') || '暂无待办';
       document.getElementById('todoList').value = todo;
     }
 
-    // 快速编辑
+    // ===================== 快速编辑 =====================
     function openConfigFile() {
       window.open(`https://github.com/${GITHUB_CONFIG.username}/${GITHUB_CONFIG.repoName}/edit/main/_config.yml`, '_blank');
     }
+
     function openPostsFolder() {
       window.open(`https://github.com/${GITHUB_CONFIG.username}/${GITHUB_CONFIG.repoName}/tree/main/_posts`, '_blank');
     }
+
     function openGist() {
       window.open(`https://gist.github.com/${GITHUB_CONFIG.username}/${GITHUB_CONFIG.gistId}`, '_blank');
     }
 
-    // 初始化
+    // ===================== 初始化 =====================
     window.onload = async () => {
-      await loadBaseData();
+      await loadAdminData();
       getCurrentVisitorId();
     };
   </script>
