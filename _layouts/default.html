@@ -26,6 +26,17 @@
     return id;
   }
 
+  // 新增：设备类型检测函数
+  function getDeviceType() {
+    const userAgent = navigator.userAgent.toLowerCase();
+    const isMobile = /mobile|android|iphone|ipad|ipod|blackberry|windows phone/i.test(userAgent);
+    const isTablet = /ipad|tablet|kindle|nexus 7|nexus 10/i.test(userAgent);
+    
+    if (isTablet) return "平板";
+    if (isMobile) return "手机";
+    return "电脑";
+  }
+
   // 2. 通用Gist请求函数（需传入PAT）
   async function requestGist(pat, method = 'GET', fileContent = {}) {
     try {
@@ -50,12 +61,16 @@
 
   // 3. 主站访客统计（仅统计主站，排除后台）
   async function trackMainSiteVisit(pat) {
-    if (!window.location.href.startsWith(SITE_CONFIG.mainDomain) || window.location.href.includes('site-admin')) {
-      return; // 排除后台页面
+    // 严格校验：仅统计前台主站，排除任何后台页面
+    const currentUrl = window.location.href;
+    // 排除包含admin的页面，且仅统计主域名下的前台页面
+    if (!currentUrl.startsWith(SITE_CONFIG.mainDomain) || currentUrl.includes('admin')) {
+      return; 
     }
 
     const visitorId = getVisitorId();
     const now = new Date().toISOString();
+    const deviceType = getDeviceType(); // 获取设备类型
     const gistData = await requestGist(pat);
     
     // 初始化统计数据
@@ -74,11 +89,16 @@
         lastVisit: now,
         visitCount: 1,
         ip: '', // 可扩展IP记录（需额外接口）
-        device: navigator.userAgent
+        device: deviceType, // 新增设备类型字段
+        userAgent: navigator.userAgent // 保留原始UA，便于后续扩展
       });
     } else {
       stats.visitors[visitorIndex].lastVisit = now;
       stats.visitors[visitorIndex].visitCount += 1;
+      // 保留首次检测的设备类型，避免同一访客切换设备导致数据变化
+      if (!stats.visitors[visitorIndex].device) {
+        stats.visitors[visitorIndex].device = deviceType;
+      }
     }
 
     // 保存统计数据
