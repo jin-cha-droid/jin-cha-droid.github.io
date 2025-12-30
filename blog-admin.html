@@ -117,7 +117,10 @@
     function switchTab(tabId) {
       document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-      event.target.classList.add('active');
+      // 修复event可能未定义的问题
+      if (event) {
+        event.target.classList.add('active');
+      }
       document.getElementById(tabId).classList.add('active');
     }
 
@@ -191,11 +194,20 @@
         if (v.lastVisit.startsWith(today)) todayTotalVisits += v.visitCount;
       });
 
+      // 新增设备类型统计
+      const deviceStats = {
+        电脑: stats.visitors.filter(v => v.device === '电脑').length,
+        手机: stats.visitors.filter(v => v.device === '手机').length,
+        平板: stats.visitors.filter(v => v.device === '平板').length,
+        未知: stats.visitors.filter(v => !v.device).length
+      };
+
       document.getElementById('statsOverview').innerHTML = `
         <div class="stats-item"><strong>总访问次数：</strong>${stats.totalVisits}</div>
         <div class="stats-item"><strong>独立访客数：</strong>${stats.visitors.length}</div>
         <div class="stats-item"><strong>今日访客数：</strong>${todayVisitors}</div>
         <div class="stats-item"><strong>今日访问次数：</strong>${todayTotalVisits}</div>
+        <div class="stats-item"><strong>设备分布：</strong>电脑(${deviceStats.电脑}) | 手机(${deviceStats.手机}) | 平板(${deviceStats.平板}) | 未知(${deviceStats.未知})</div>
       `;
 
       // 渲染访客列表
@@ -211,6 +223,7 @@
           <div class="visitor-item">
             <div><strong>访客 ${i+1}</strong> | ID：${v.id}</div>
             <div>访问次数：${v.visitCount} 次</div>
+            <div>设备类型：${v.device || '未知'}</div>
             <div>首次访问：${formatTime(v.firstVisit)}</div>
             <div>最后访问：${formatTime(v.lastVisit)}</div>
             <div class="actions">
@@ -349,13 +362,24 @@
       alert('设置保存成功！');
     }
 
-    // 辅助函数：格式化时间
+    // 辅助函数：格式化时间（修复时间显示问题）
     function formatTime(timeStr) {
       if (!timeStr) return '未知';
-      return new Date(timeStr).toLocaleString('zh-CN', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit'
-      });
+      try {
+        const date = new Date(timeStr);
+        // 修复时区问题，确保显示正确的本地时间
+        return date.toLocaleString('zh-CN', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false // 使用24小时制
+        });
+      } catch (e) {
+        return '格式错误';
+      }
     }
 
     // 初始化
@@ -363,6 +387,7 @@
       const savedPat = localStorage.getItem('site_admin_pat');
       if (savedPat) {
         document.getElementById('adminPatInput').value = savedPat;
+        // 后台页面不触发统计，仅加载数据
         loadStats();
         loadBanList();
         loadNotice();
