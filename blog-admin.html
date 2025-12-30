@@ -3,6 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- 新增安全响应头 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+  <meta http-equiv="X-XSS-Protection" content="1; mode=block">
+  <meta http-equiv="X-Frame-Options" content="DENY">
+  <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <title>网站管理后台</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: "Microsoft Yahei"; }
@@ -104,6 +109,117 @@
   </div>
 
   <script>
+    // ========== 安全防护核心类（新增） ==========
+    class SiteSecurity {
+      // 1. 请求限流（防止暴力请求/DoS攻击）
+      static rateLimit = {
+        requests: new Map(), // 存储{访客ID: {count: 请求数, timestamp: 最后请求时间}}
+        limit: 60, // 每分钟最多60次请求
+        windowMs: 60 * 1000 // 限流窗口（1分钟）
+      };
+
+      // 检查请求是否超限
+      static checkRateLimit(visitorId) {
+        const now = Date.now();
+        const record = this.rateLimit.requests.get(visitorId) || { count: 0, timestamp: now };
+
+        // 重置过期的计数
+        if (now - record.timestamp > this.rateLimit.windowMs) {
+          record.count = 0;
+          record.timestamp = now;
+        }
+
+        // 检查是否超限
+        if (record.count >= this.rateLimit.limit) {
+          return false; // 超出限制
+        }
+
+        // 更新计数
+        record.count += 1;
+        this.rateLimit.requests.set(visitorId, record);
+        return true; // 允许请求
+      }
+
+      // 2. XSS攻击防护（过滤危险字符）
+      static sanitizeXSS(input) {
+        if (!input || typeof input !== 'string') return input;
+        // 转义HTML特殊字符
+        const escapeMap = {
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;',
+          '/': '&#x2F;',
+          '`': '&#x60;',
+          '=': '&#x3D;'
+        };
+        return input.replace(/[&<>"'`=\/]/g, match => escapeMap[match]);
+      }
+
+      // 3. CSRF防护（生成/验证令牌）
+      static generateCSRFToken() {
+        // 生成随机令牌
+        const token = crypto.getRandomValues(new Uint32Array(2)).join('-');
+        // 存储到localStorage（后台专用）
+        localStorage.setItem('site_csrf_token', token);
+        return token;
+      }
+
+      static verifyCSRFToken(token) {
+        const storedToken = localStorage.getItem('site_csrf_token');
+        return storedToken && storedToken === token;
+      }
+
+      // 4. 危险IP/行为检测（可扩展）
+      static isDangerousRequest(visitorId, action) {
+        // 示例：检测短时间内频繁拉黑/解除拉黑的异常行为
+        const dangerousActions = ['addBan', 'removeBan', 'clearStats'];
+        if (!dangerousActions.includes(action)) return false;
+
+        const actionRecord = JSON.parse(localStorage.getItem(`site_dangerous_actions_${visitorId}`) || '{"count":0,"time":0}');
+        const now = Date.now();
+
+        // 5分钟内超过5次危险操作视为异常
+        if (now - actionRecord.time < 5 * 60 * 1000 && actionRecord.count >= 5) {
+          return true;
+        }
+
+        // 更新记录
+        actionRecord.count += 1;
+        actionRecord.time = now;
+        localStorage.setItem(`site_dangerous_actions_${visitorId}`, JSON.stringify(actionRecord));
+        return false;
+      }
+
+      // 5. 数据合法性校验（防止恶意数据注入）
+      static validateData(data, type) {
+        switch (type) {
+          case 'visitorId':
+            // 校验访客ID格式（匹配VIS_开头+时间戳+随机字符串）
+            return /^VIS_\d+_[a-z0-9]{12}$/.test(data);
+          case 'pat':
+            // 校验PAT格式（ghp_开头，36位字符）
+            return /^ghp_[a-zA-Z0-9]{36}$/.test(data);
+          case 'notice':
+            // 限制公告内容长度，防止超大数据攻击
+            return typeof data === 'string' && data.length <= 500;
+          default:
+            return !!data;
+        }
+      }
+
+      // 6. 获取后台访客ID（用于限流/行为检测）
+      static getAdminVisitorId() {
+        let id = localStorage.getItem('admin_visitor_id');
+        if (!id) {
+          id = `ADMIN_${Date.now()}_${Math.random().toString(36).slice(2, 14)}`;
+          localStorage.setItem('admin_visitor_id', id);
+        }
+        return id;
+      }
+    }
+
     // 核心配置
     let CONFIG = {
       gistId: "778c919fa51dbc8b932261916da783e7",
@@ -136,6 +252,11 @@
 
     function savePat() {
       const pat = document.getElementById('adminPatInput').value.trim();
+      // 安全防护：校验PAT格式
+      if (!SiteSecurity.validateData(pat, 'pat')) {
+        alert('非法PAT格式！请输入ghp_开头的36位有效PAT');
+        return;
+      }
       if (!pat || !pat.startsWith('ghp_')) {
         alert('请输入有效的PAT！');
         return;
@@ -150,10 +271,17 @@
       alert('本地PAT已清除！');
     }
 
-    // 3. 通用Gist请求
+    // 3. 通用Gist请求（增加限流防护）
     async function requestGist(method = 'GET', fileContent = {}) {
       const pat = getPat();
       if (!pat) return null;
+
+      // 安全防护：请求限流
+      const adminId = SiteSecurity.getAdminVisitorId();
+      if (!SiteSecurity.checkRateLimit(adminId)) {
+        alert('请求过于频繁，请1分钟后再试！');
+        return null;
+      }
       
       try {
         const headers = {
@@ -236,6 +364,20 @@
     }
 
     async function clearStats() {
+      // 安全防护：1. CSRF校验
+      if (!SiteSecurity.verifyCSRFToken(localStorage.getItem('site_csrf_token'))) {
+        alert('安全验证失败，请刷新页面重试！');
+        SiteSecurity.generateCSRFToken(); // 重新生成令牌
+        return;
+      }
+
+      // 安全防护：2. 危险行为检测
+      const adminId = SiteSecurity.getAdminVisitorId();
+      if (SiteSecurity.isDangerousRequest(adminId, 'clearStats')) {
+        alert('检测到异常操作行为，暂时禁止清空统计数据！');
+        return;
+      }
+
       if (!confirm('确定清空所有统计数据？此操作不可恢复！')) return;
       const emptyStats = { visitors: [], totalVisits: 0 };
       await requestGist('PATCH', {
@@ -280,6 +422,27 @@
 
     async function addBan() {
       const visitorId = document.getElementById('banVisitorId').value.trim();
+      
+      // 安全防护：1. 校验访客ID合法性
+      if (!SiteSecurity.validateData(visitorId, 'visitorId')) {
+        alert('非法访客ID格式！正确格式应为VIS_开头+数字+随机字符串');
+        return;
+      }
+
+      // 安全防护：2. CSRF校验
+      if (!SiteSecurity.verifyCSRFToken(localStorage.getItem('site_csrf_token'))) {
+        alert('安全验证失败，请刷新页面重试！');
+        SiteSecurity.generateCSRFToken(); // 重新生成令牌
+        return;
+      }
+
+      // 安全防护：3. 危险行为检测
+      const adminId = SiteSecurity.getAdminVisitorId();
+      if (SiteSecurity.isDangerousRequest(adminId, 'addBan')) {
+        alert('拉黑操作过于频繁，5分钟内最多可操作5次！');
+        return;
+      }
+
       if (!visitorId) {
         alert('请输入访客ID！');
         return;
@@ -306,6 +469,27 @@
 
     async function removeBan(visitorId) {
       const id = visitorId || document.getElementById('banVisitorId').value.trim();
+      
+      // 安全防护：1. 校验访客ID合法性
+      if (!SiteSecurity.validateData(id, 'visitorId')) {
+        alert('非法访客ID格式！');
+        return;
+      }
+
+      // 安全防护：2. CSRF校验
+      if (!SiteSecurity.verifyCSRFToken(localStorage.getItem('site_csrf_token'))) {
+        alert('安全验证失败，请刷新页面重试！');
+        SiteSecurity.generateCSRFToken();
+        return;
+      }
+
+      // 安全防护：3. 危险行为检测
+      const adminId = SiteSecurity.getAdminVisitorId();
+      if (SiteSecurity.isDangerousRequest(adminId, 'removeBan')) {
+        alert('解除拉黑操作过于频繁，5分钟内最多可操作5次！');
+        return;
+      }
+
       if (!id) {
         alert('请输入访客ID！');
         return;
@@ -343,8 +527,24 @@
     }
 
     async function saveNotice() {
+      const rawContent = document.getElementById('noticeContent').value.trim();
+      // 安全防护：1. XSS过滤
+      const safeContent = SiteSecurity.sanitizeXSS(rawContent);
+      // 安全防护：2. 内容长度校验
+      if (!SiteSecurity.validateData(safeContent, 'notice')) {
+        alert('公告内容过长！最多只能输入500个字符');
+        return;
+      }
+
+      // 安全防护：3. CSRF校验
+      if (!SiteSecurity.verifyCSRFToken(localStorage.getItem('site_csrf_token'))) {
+        alert('安全验证失败，请刷新页面重试！');
+        SiteSecurity.generateCSRFToken();
+        return;
+      }
+
       const notice = {
-        content: document.getElementById('noticeContent').value.trim(),
+        content: safeContent, // 使用过滤后的安全内容
         show: document.getElementById('noticeShow').value === 'true'
       };
 
@@ -357,6 +557,13 @@
 
     // 7. 高级设置
     async function saveSettings() {
+      // 安全防护：CSRF校验
+      if (!SiteSecurity.verifyCSRFToken(localStorage.getItem('site_csrf_token'))) {
+        alert('安全验证失败，请刷新页面重试！');
+        SiteSecurity.generateCSRFToken();
+        return;
+      }
+
       CONFIG.gistId = document.getElementById('gistIdInput').value.trim();
       CONFIG.mainDomain = document.getElementById('mainDomainInput').value.trim();
       alert('设置保存成功！');
@@ -384,8 +591,18 @@
 
     // 初始化
     window.onload = function() {
+      // 安全防护：生成CSRF令牌
+      SiteSecurity.generateCSRFToken();
+
       const savedPat = localStorage.getItem('site_admin_pat');
       if (savedPat) {
+        // 安全防护：校验PAT格式
+        if (!SiteSecurity.validateData(savedPat, 'pat')) {
+          alert('检测到非法PAT格式，请重新输入！');
+          clearPat();
+          return;
+        }
+
         document.getElementById('adminPatInput').value = savedPat;
         // 后台页面不触发统计，仅加载数据
         loadStats();
