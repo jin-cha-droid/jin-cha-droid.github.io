@@ -7,7 +7,7 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: "Microsoft Yahei"; }
     body { background: #f0f2f5; padding: 20px; max-width: 1000px; margin: 0 auto; }
-    .admin-container { background: #fff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 30px; }
+    .admin-container { background: #fff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 30px; display: none; } /* 初始隐藏 */
     .header { font-size: 24px; font-weight: 600; color: #1f2937; margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px solid #e5e7eb; }
     .config-area { margin-bottom: 20px; padding: 15px; background: #f9fafb; border-radius: 8px; }
     .input-group { margin: 10px 0; }
@@ -27,10 +27,20 @@
     .tab-content { display: none; padding: 20px; border: 1px solid #e5e7eb; border-radius: 0 6px 6px 6px; }
     .tab-content.active { display: block; }
     .empty-tip { text-align: center; padding: 20px; color: #9ca3af; }
+    /* Turnstile 验证样式 */
+    .turnstile-container { background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); max-width: 500px; margin: 50px auto; text-align: center; }
   </style>
 </head>
 <body>
-  <div class="admin-container">
+  <!-- Cloudflare Turnstile 验证容器 -->
+  <div class="turnstile-container">
+    <h3>🔐 后台访问验证</h3>
+    <div id="cf-turnstile" style="margin: 20px auto;"></div>
+    <p style="color: #9ca3af; font-size: 14px;">验证通过后自动进入后台</p>
+  </div>
+
+  <!-- 原有后台内容（初始隐藏） -->
+  <div class="admin-container" id="admin-content">
     <div class="header">⚙️ 网站管理后台</div>
 
     <!-- 1. PAT配置区 -->
@@ -52,12 +62,19 @@
       <button class="tab" onclick="switchTab('settings')">高级设置</button>
     </div>
 
-    <!-- 2.1 访客统计标签 -->
+    <!-- 2.1 访客统计标签（集成无服务器统计） -->
     <div class="tab-content active" id="stats">
-      <button onclick="loadStats()" class="btn-primary">刷新统计数据</button>
+      <button onclick="loadStats()" class="btn-primary">刷新Gist统计</button>
+      <button onclick="loadCloudflareStats()" class="btn-primary">刷新Cloudflare统计</button>
       <button onclick="clearStats()" class="btn-danger">清空统计数据</button>
       <div class="stats-card" id="statsOverview"></div>
       <div class="visitor-list" id="visitorList"></div>
+      <!-- Cloudflare 统计展示区 -->
+      <div class="stats-card" style="margin-top: 20px;">
+        <h4>Cloudflare 无服务器统计</h4>
+        <div class="stats-item"><strong>总访客数（Cloudflare）：</strong><span id="cf-visitor-total">0</span></div>
+        <div class="visitor-list" id="cf-visitor-list" style="margin-top: 10px;">加载中...</div>
+      </div>
     </div>
 
     <!-- 2.2 拉黑管理标签 -->
@@ -104,6 +121,94 @@
   </div>
 
   <script>
+    // ========== Cloudflare Turnstile 配置 ==========
+    // 初始化Turnstile验证
+    window.onload = function() {
+      // 加载Turnstile脚本
+      const script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+      script.async = true;
+      script.defer = true;
+      document.body.appendChild(script);
+
+      // 渲染Turnstile验证
+      script.onload = function() {
+        turnstile.render('#cf-turnstile', {
+          sitekey: '0x4AAAAAACJ59HZik1cWNIrS', // 已替换为你的Turnstile密钥
+          callback: function(token) {
+            // 验证通过，显示后台
+            document.querySelector('.turnstile-container').style.display = 'none';
+            document.getElementById('admin-content').style.display = 'block';
+            // 初始化原有后台功能
+            initAdmin();
+          },
+          "error-callback": function(error) {
+            alert("验证失败，请刷新页面重试！");
+          }
+        });
+      };
+
+      // 初始化Cloudflare统计（所有页面加载时执行）
+      getVisitorInfo();
+    };
+
+    // ========== Cloudflare 无服务器统计功能 ==========
+    // 1. 统计当前访客数据
+    async function getVisitorInfo() {
+      try {
+        // 通过Cloudflare接口获取访客IP
+        const ipRes = await fetch("https://api.cloudflare.com/cdn-cgi/trace");
+        const ipText = await ipRes.text();
+        const ip = ipText.match(/ip=([\d\.]+)/)[1];
+        const ua = navigator.userAgent;
+        const page = window.location.href;
+
+        // 调用Cloudflare Workers统计接口（已补全地址和路径）
+        await fetch("https://221banjiaoliu.3348228706.workers.dev/api/visitor", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ip, ua, page }),
+        });
+      } catch (e) {
+        console.log("Cloudflare统计失败：", e);
+      }
+    }
+
+    // 2. 加载Cloudflare统计数据（后台专用）
+    async function loadCloudflareStats() {
+      try {
+        // 调用Cloudflare Workers获取统计接口（已补全地址和路径）
+        const res = await fetch("https://221banjiaoliu.3348228706.workers.dev/api/getVisitors");
+        const data = await res.json();
+        if (data.code === 0) {
+          // 显示总访客数
+          document.getElementById("cf-visitor-total").innerText = data.data.length;
+          // 渲染访客列表
+          let listHtml = '';
+          if (data.data.length === 0) {
+            listHtml = '<div class="empty-tip">暂无Cloudflare统计数据</div>';
+          } else {
+            data.data.forEach((v, i) => {
+              listHtml += `
+                <div class="visitor-item">
+                  <div><strong>访客 ${i+1}</strong> | IP：${v.ip}</div>
+                  <div>访问页面：${v.page}</div>
+                  <div>设备信息：${v.ua.substring(0, 100)}...</div>
+                  <div>访问时间：${v.time}</div>
+                </div>
+              `;
+            });
+          }
+          document.getElementById("cf-visitor-list").innerHTML = listHtml;
+        } else {
+          document.getElementById("cf-visitor-list").innerText = "无权限查看（IP不在白名单）";
+        }
+      } catch (e) {
+        document.getElementById("cf-visitor-list").innerText = "统计数据加载失败：" + e.message;
+      }
+    }
+
+    // ========== 原有后台功能（保留不变） ==========
     // 核心配置
     let CONFIG = {
       gistId: "778c919fa51dbc8b932261916da783e7",
@@ -113,11 +218,21 @@
       mainDomain: "https://jin-cha-droid.github.io/"
     };
 
+    // 初始化后台（验证通过后执行）
+    function initAdmin() {
+      const savedPat = localStorage.getItem('site_admin_pat');
+      if (savedPat) {
+        document.getElementById('adminPatInput').value = savedPat;
+        loadStats();
+        loadBanList();
+        loadNotice();
+      }
+    }
+
     // 1. 标签切换
     function switchTab(tabId) {
       document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-      // 修复event可能未定义的问题
       if (event) {
         event.target.classList.add('active');
       }
@@ -175,7 +290,7 @@
       }
     }
 
-    // 4. 访客统计功能
+    // 4. 访客统计功能（原有Gist统计）
     async function loadStats() {
       const gistData = await requestGist();
       if (!gistData) return;
@@ -362,12 +477,11 @@
       alert('设置保存成功！');
     }
 
-    // 辅助函数：格式化时间（修复时间显示问题）
+    // 辅助函数：格式化时间
     function formatTime(timeStr) {
       if (!timeStr) return '未知';
       try {
         const date = new Date(timeStr);
-        // 修复时区问题，确保显示正确的本地时间
         return date.toLocaleString('zh-CN', {
           year: 'numeric',
           month: '2-digit',
@@ -375,24 +489,12 @@
           hour: '2-digit',
           minute: '2-digit',
           second: '2-digit',
-          hour12: false // 使用24小时制
+          hour12: false
         });
       } catch (e) {
         return '格式错误';
       }
     }
-
-    // 初始化
-    window.onload = function() {
-      const savedPat = localStorage.getItem('site_admin_pat');
-      if (savedPat) {
-        document.getElementById('adminPatInput').value = savedPat;
-        // 后台页面不触发统计，仅加载数据
-        loadStats();
-        loadBanList();
-        loadNotice();
-      }
-    };
   </script>
 </body>
 </html>
